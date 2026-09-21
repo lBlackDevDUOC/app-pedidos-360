@@ -1,0 +1,50 @@
+name: Deploy Backend a EC2
+
+on:
+  push:
+    branches: [ "main", "master" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v3
+
+      - name: Configurar Java 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'corretto'
+          cache: maven
+          cache-dependency-path: 'pedidos360-backend/pom.xml'
+
+      - name: Dar permisos de ejecución al wrapper
+        run: chmod +x mvnw
+        working-directory: pedidos360-backend
+
+      - name: Compilar JAR
+        run: ./mvnw clean package -DskipTests
+        working-directory: pedidos360-backend
+
+      - name: Copiar JAR a la EC2 vía SCP
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "pedidos360-backend/target/*.jar"
+          target: "/home/ec2-user/app"
+          strip_components: 2
+
+      - name: Iniciar servicio en EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            mkdir -p /home/ec2-user/app
+            pkill -f 'java -jar' || true
+            nohup java -jar /home/ec2-user/app/*.jar > /home/ec2-user/app.log 2>&1 &
