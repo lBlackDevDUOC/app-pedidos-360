@@ -1,4 +1,3 @@
-  cat << 'EOF' > .github/workflows/deploy.yml
   name: Deploy Backend a EC2
 
   on:
@@ -44,8 +43,3 @@
               mkdir -p /home/ec2-user/app
               pkill -f 'java -jar' || true
               nohup java -jar /home/ec2-user/app/*.jar > /home/ec2-user/app.log 2>&1 &
-    EOF
-    
-    git add .github/workflows/deploy.yml
-  git commit -m "fix: usa mvn nativo y actualiza dependencias de CI/CD"
-    git push
