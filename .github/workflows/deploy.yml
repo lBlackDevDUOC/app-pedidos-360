@@ -14,10 +14,14 @@ jobs:
 
       - name: Ejecutar despliegue Docker en EC2
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: DB_USERNAME,DB_PASSWORD
           script: |
             # 1. Crear red personalizada de Docker si no existe
             docker network create pedidos360-net || true
@@ -28,8 +32,8 @@ jobs:
                 --name pedidos360-db \
                 --network pedidos360-net \
                 -e POSTGRES_DB=pedidos360_db \
-                -e POSTGRES_USER=pedidos_user \
-                -e POSTGRES_PASSWORD=pedidos_pass \
+                -e POSTGRES_USER="$DB_USERNAME" \
+                -e POSTGRES_PASSWORD="$DB_PASSWORD" \
                 -p 5432:5432 \
                 -v postgres-data:/var/lib/postgresql/data \
                 --restart unless-stopped \
@@ -62,5 +66,20 @@ jobs:
               --network pedidos360-net \
               -p 8080:8080 \
               -e SPRING_DATASOURCE_URL=jdbc:postgresql://pedidos360-db:5432/pedidos360_db \
+              -e DB_USERNAME="$DB_USERNAME" \
+              -e DB_PASSWORD="$DB_PASSWORD" \
               --restart unless-stopped \
               pedidos360-backend
+            
+            # 6. Construir y desplegar Frontend (Angular + Nginx)
+                  cd /home/ec2-user/app/pedidos360-frontend
+                  docker build -t pedidos360-frontend .
+
+                  docker stop pedidos360-frontend || true
+                  docker rm pedidos360-frontend || true
+                  docker run -d \
+                    --name pedidos360-frontend \
+                    --network pedidos360-net \
+                    -p 80:80 \
+                    --restart unless-stopped \
+                    pedidos360-frontend
