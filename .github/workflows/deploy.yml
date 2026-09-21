@@ -19,26 +19,25 @@ jobs:
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            # 1. Asegurar que Git esté instalado en Amazon Linux
+            # 1. Verificar instalación de Git
             which git || sudo dnf install -y git
             
-            # 2. Crear y posicionarse en la carpeta del proyecto
-            mkdir -p /home/ec2-user/app
-            cd /home/ec2-user/app
-            
-            # 3. Clonar o actualizar el repositorio en la rama BlackDev
-            if [ ! -d ".git" ]; then
-              git clone -b BlackDev https://github.com/${{ github.repository }}.git .
-            else
+            # 2. Gestionar la carpeta /home/ec2-user/app limpia
+            if [ -d "/home/ec2-user/app/.git" ]; then
+              cd /home/ec2-user/app
               git fetch origin BlackDev
               git reset --hard origin/BlackDev
+            else
+              rm -rf /home/ec2-user/app
+              git clone -b BlackDev https://github.com/${{ github.repository }}.git /home/ec2-user/app
+              cd /home/ec2-user/app
             fi
             
-            # 4. Construir imagen Multi-Stage
+            # 3. Construir la imagen Multi-Stage
             cd pedidos360-backend
             docker build -t pedidos360-backend .
             
-            # 5. Desplegar contenedor
+            # 4. Desplegar el contenedor
             docker stop pedidos360-backend || true
             docker rm pedidos360-backend || true
             docker run -d --name pedidos360-backend -p 8080:8080 --restart unless-stopped pedidos360-backend
