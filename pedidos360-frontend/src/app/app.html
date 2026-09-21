@@ -1,0 +1,70 @@
+<div style="max-width: 800px; margin: 50px auto; font-family: Arial, sans-serif; text-align: center; border: 1px solid #ccc; padding: 30px; border-radius: 8px;">
+  <h1>{{ title }}</h1>
+  <hr style="margin: 20px 0;" />
+
+  @if (!isLoggedIn()) {
+    <div>
+      <p>Debes autenticarte con tu cuenta de Microsoft Entra ID para acceder al sistema.</p>
+      <button (click)="login()" style="padding: 10px 20px; background-color: #0078d4; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px;">
+        Iniciar sesión con Microsoft
+      </button>
+    </div>
+  } @else {
+    <div>
+      <p>¡Bienvenido, <strong>{{ perfil()?.nombre ?? getUserName() }}</strong>!</p>
+      <p style="color: #555;">{{ perfil()?.email ?? getUserName() }} · Cliente #{{ perfil()?.id }}</p>
+      <button (click)="logout()" style="padding: 10px 20px; background-color: #d9381e; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px;">
+        Cerrar sesión
+      </button>
+    </div>
+
+    <hr style="margin: 20px 0;" />
+
+    <h2>Mis pedidos</h2>
+    <form (ngSubmit)="crearPedido()" style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-bottom: 20px;">
+      <input name="total" type="number" min="1" [(ngModel)]="nuevoPedido.total" placeholder="Total" required style="padding: 8px; width: 110px;" />
+      <select name="estado" [(ngModel)]="nuevoPedido.estado" style="padding: 8px;">
+        @for (e of estados; track e) {
+          <option [value]="e">{{ e }}</option>
+        }
+      </select>
+      <button type="submit" style="padding: 8px 16px; background-color: #107c10; color: white; border: none; border-radius: 4px; cursor: pointer;">
+        Crear pedido
+      </button>
+      <button type="button" (click)="cargarTodo()" style="padding: 8px 16px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;">
+        Recargar
+      </button>
+    </form>
+
+    @if (error()) {
+      <p style="color: #d9381e;">{{ error() }}</p>
+    }
+
+    @if (cargando()) {
+      <p>Cargando pedidos...</p>
+    } @else if (pedidos().length === 0) {
+      <p>Aún no tienes pedidos.</p>
+    } @else {
+      <table style="width: 100%; border-collapse: collapse; text-align: left;">
+        <thead>
+          <tr style="background-color: #f0f0f0;">
+            <th style="padding: 8px;">ID</th>
+            <th style="padding: 8px;">Total</th>
+            <th style="padding: 8px;">Estado</th>
+            <th style="padding: 8px;">Fecha</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (p of pedidos(); track p.id) {
+            <tr style="border-bottom: 1px solid #ddd;">
+              <td style="padding: 8px;">{{ p.id }}</td>
+              <td style="padding: 8px;">{{ p.total | number: '1.0-0' }}</td>
+              <td style="padding: 8px;">{{ p.estado }}</td>
+              <td style="padding: 8px;">{{ p.fechaCreacion | date: 'dd/MM/yyyy HH:mm' }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  }
+</div>
