@@ -1,45 +1,40 @@
-  name: Deploy Backend a EC2
+name: Deploy Backend con Docker
 
-  on:
-    push:
-      branches: [ "BlackDev" ]
+on:
+  push:
+    branches: [ "BlackDev" ]
 
-  jobs:
-    deploy:
-      runs-on: ubuntu-latest
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
 
-      steps:
-        - name: Descargar código
-          uses: actions/checkout@v4
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
 
-        - name: Configurar Java 17
-          uses: actions/setup-java@v4
-          with:
-            java-version: '21'
-            distribution: 'corretto'
-            cache: 'maven'
-
-        - name: Compilar JAR
-          run: mvn clean package -DskipTests
-          working-directory: pedidos360-backend
-
-        - name: Copiar JAR a la EC2 vía SCP
-          uses: appleboy/scp-action@v0.1.7
-          with:
-            host: ${{ secrets.EC2_HOST }}
-            username: ${{ secrets.EC2_USERNAME }}
-            key: ${{ secrets.EC2_SSH_KEY }}
-            source: "pedidos360-backend/target/*.jar"
-            target: "/home/ec2-user/app"
-            strip_components: 2
-
-        - name: Iniciar servicio en EC2
-          uses: appleboy/ssh-action@v1.0.3
-          with:
-            host: ${{ secrets.EC2_HOST }}
-            username: ${{ secrets.EC2_USERNAME }}
-            key: ${{ secrets.EC2_SSH_KEY }}
-            script: |
-              mkdir -p /home/ec2-user/app
-              pkill -f 'java -jar' || true
-              nohup java -jar /home/ec2-user/app/*.jar > /home/ec2-user/app.log 2>&1 &
+      - name: Ejecutar despliegue Docker en EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            mkdir -p /home/ec2-user/app
+            cd /home/ec2-user/app
+            
+            # Clonar o actualizar la rama BlackDev
+            if [ ! -d ".git" ]; then
+              git clone -b BlackDev https://github.com/${{ github.repository }}.git .
+            else
+              git fetch origin BlackDev
+              git reset --hard origin/BlackDev
+            fi
+            
+            # Construir imagen Multi-Stage
+            cd pedidos360-backend
+            docker build -t pedidos360-backend .
+            
+            # Reemplazar contenedor
+            docker stop pedidos360-backend || true
+            docker rm pedidos360-backend || true
+            docker run -d --name pedidos360-backend -p 8080:8080 --restart unless-stopped pedidos360-backend
