@@ -19,10 +19,27 @@ jobs:
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            # 1. Verificar instalación de Git
-            which git || sudo dnf install -y git
+            # 1. Crear red personalizada de Docker si no existe
+            docker network create pedidos360-net || true
             
-            # 2. Gestionar la carpeta /home/ec2-user/app limpia
+            # 2. Verificar o iniciar PostgreSQL
+            if [ ! "$(docker ps -q -f name=pedidos360-db)" ]; then
+              docker run -d \
+                --name pedidos360-db \
+                --network pedidos360-net \
+                -e POSTGRES_DB=pedidos360_db \
+                -e POSTGRES_USER=pedidos_user \
+                -e POSTGRES_PASSWORD=pedidos_pass \
+                -p 5432:5432 \
+                -v postgres-data:/var/lib/postgresql/data \
+                --restart unless-stopped \
+                postgres:16-alpine || true
+            else
+              docker network connect pedidos360-net pedidos360-db || true
+            fi
+            
+            # 3. Actualizar código del repositorio
+            mkdir -p /home/ec2-user/app
             if [ -d "/home/ec2-user/app/.git" ]; then
               cd /home/ec2-user/app
               git fetch origin BlackDev
@@ -33,11 +50,17 @@ jobs:
               cd /home/ec2-user/app
             fi
             
-            # 3. Construir la imagen Multi-Stage
+            # 4. Reconstruir la imagen de Spring Boot
             cd pedidos360-backend
             docker build -t pedidos360-backend .
             
-            # 4. Desplegar el contenedor
+            # 5. Reiniciar el contenedor en la red de la BD
             docker stop pedidos360-backend || true
             docker rm pedidos360-backend || true
-            docker run -d --name pedidos360-backend -p 8080:8080 --restart unless-stopped pedidos360-backend
+            docker run -d \
+              --name pedidos360-backend \
+              --network pedidos360-net \
+              -p 8080:8080 \
+              -e SPRING_DATASOURCE_URL=jdbc:postgresql://pedidos360-db:5432/pedidos360_db \
+              --restart unless-stopped \
+              pedidos360-backend
