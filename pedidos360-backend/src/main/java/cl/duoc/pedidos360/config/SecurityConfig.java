@@ -29,24 +29,33 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-            // API stateless con Bearer token: CSRF no aplica
-            .csrf(AbstractHttpConfigurer::disable)
-            // El frontend (localhost:4200) es otro origen
-            .cors(Customizer.withDefaults())
-            // Sin sesiones HTTP: cada petición se autentica solo con su JWT
-            .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .authorizeHttpRequests(auth -> auth
-                // Preflight CORS: el navegador no envía token en OPTIONS
-                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-                // Único endpoint público (health check del API Gateway)
-                .requestMatchers("/api/health").permitAll()
-                // Todo lo demás bajo /api requiere JWT válido
-                .requestMatchers("/api/**").authenticated()
-                // Cualquier otra ruta también se protege por defecto
-                .anyRequest().authenticated()
-            )
-            // Valida el JWT (firma, issuer, expiración, audience) según application.properties
-            .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()));
+                // API stateless con Bearer token: CSRF no aplica
+                .csrf(AbstractHttpConfigurer::disable)
+                // El frontend (localhost:4200) es otro origen
+                .cors(Customizer.withDefaults())
+                // Sin sesiones HTTP: cada petición se autentica solo con su JWT
+                .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(auth -> auth
+                        // Preflight CORS: el navegador no envía token en OPTIONS
+                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                        // Rutas públicas de Swagger UI y documentación OpenAPI
+                        .requestMatchers(
+                                "/swagger-ui/**",
+                                "/swagger-ui.html",
+                                "/v3/api-docs/**",
+                                "/v3/api-docs",
+                                "/swagger-resources/**",
+                                "/webjars/**"
+                        ).permitAll()
+                        // Único endpoint público (health check del API Gateway)
+                        .requestMatchers("/api/health").permitAll()
+                        // Todo lo demás bajo /api requiere JWT válido
+                        .requestMatchers("/api/**").authenticated()
+                        // Cualquier otra ruta también se protege por defecto
+                        .anyRequest().authenticated()
+                )
+                // Valida el JWT (firma, issuer, expiración, audience) según application.properties
+                .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()));
 
         return http.build();
     }
@@ -61,7 +70,7 @@ public class SecurityConfig {
         config.setAllowedHeaders(List.of("Authorization", "Content-Type"));
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/api/**", config);
+        source.registerCorsConfiguration("/**", config);
         return source;
     }
 }
