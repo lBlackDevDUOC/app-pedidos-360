@@ -1,4 +1,4 @@
-name: Deploy Backend con Docker
+name: Deploy Pedidos360
 
 on:
   push:
@@ -12,6 +12,46 @@ jobs:
       - name: Descargar código
         uses: actions/checkout@v4
 
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compilar Frontend Angular
+        run: |
+          cd pedidos360-frontend
+          npm ci
+          npm run build -- --configuration production
+
+      # 1. Actualizar código del Backend en EC2 primero
+      - name: Sincronizar repositorio en EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            mkdir -p /home/ec2-user/app
+            if [ -d "/home/ec2-user/app/.git" ]; then
+              cd /home/ec2-user/app
+              git fetch origin BlackDev
+              git reset --hard origin/BlackDev
+            else
+              rm -rf /home/ec2-user/app
+              git clone -b BlackDev https://github.com/${{ github.repository }}.git /home/ec2-user/app
+            fi
+
+      # 2. Copiar archivos compilados del Frontend a la EC2
+      - name: Copiar dist del Frontend a la EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "pedidos360-frontend/dist,pedidos360-frontend/Dockerfile,pedidos360-frontend/nginx.conf"
+          target: "/home/ec2-user/app"
+
+      # 3. Desplegar contenedores Docker en EC2
       - name: Ejecutar despliegue Docker en EC2
         uses: appleboy/ssh-action@v1.0.3
         env:
@@ -23,10 +63,10 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           envs: DB_USERNAME,DB_PASSWORD
           script: |
-            # 1. Crear red personalizada de Docker si no existe
+            # Crear red personalizada de Docker si no existe
             docker network create pedidos360-net || true
             
-            # 2. Verificar o iniciar PostgreSQL
+            # Verificar o iniciar PostgreSQL
             if [ ! "$(docker ps -q -f name=pedidos360-db)" ]; then
               docker run -d \
                 --name pedidos360-db \
@@ -42,23 +82,9 @@ jobs:
               docker network connect pedidos360-net pedidos360-db || true
             fi
             
-            # 3. Actualizar código del repositorio
-            mkdir -p /home/ec2-user/app
-            if [ -d "/home/ec2-user/app/.git" ]; then
-              cd /home/ec2-user/app
-              git fetch origin BlackDev
-              git reset --hard origin/BlackDev
-            else
-              rm -rf /home/ec2-user/app
-              git clone -b BlackDev https://github.com/${{ github.repository }}.git /home/ec2-user/app
-              cd /home/ec2-user/app
-            fi
-            
-            # 4. Reconstruir la imagen de Spring Boot
-            cd pedidos360-backend
+            # Reconstruir y desplegar la imagen de Spring Boot
+            cd /home/ec2-user/app/pedidos360-backend
             docker build -t pedidos360-backend .
-            
-            # 5. Reiniciar el contenedor en la red de la BD
             docker stop pedidos360-backend || true
             docker rm pedidos360-backend || true
             docker run -d \
@@ -70,16 +96,15 @@ jobs:
               -e DB_PASSWORD="$DB_PASSWORD" \
               --restart unless-stopped \
               pedidos360-backend
-            
-            # 6. Construir y desplegar Frontend (Angular + Nginx)
-                  cd /home/ec2-user/app/pedidos360-frontend
-                  docker build -t pedidos360-frontend .
 
-                  docker stop pedidos360-frontend || true
-                  docker rm pedidos360-frontend || true
-                  docker run -d \
-                    --name pedidos360-frontend \
-                    --network pedidos360-net \
-                    -p 80:80 \
-                    --restart unless-stopped \
-                    pedidos360-frontend
+            # Reconstruir y desplegar Frontend (Angular + Nginx)
+            cd /home/ec2-user/app/pedidos360-frontend
+            docker build -t pedidos360-frontend .
+            docker stop pedidos360-frontend || true
+            docker rm pedidos360-frontend || true
+            docker run -d \
+              --name pedidos360-frontend \
+              --network pedidos360-net \
+              -p 80:80 \
+              --restart unless-stopped \
+              pedidos360-frontend
