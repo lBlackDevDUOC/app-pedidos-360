@@ -7,5 +7,5 @@ export const environment = {
     redirectUri: window.location.origin,
     protectedResourceScopes: ['api://d4b53b0b-a9b3-42b4-b63d-71d24f58813b/OT.Create'],
   },
-  apiBaseUrl: 'http://54.242.195.23:8080',
+  apiBaseUrl: 'https://gsk99c2ala.execute-api.us-east-1.amazonaws.com',
 };
