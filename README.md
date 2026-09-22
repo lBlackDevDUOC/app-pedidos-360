@@ -190,13 +190,13 @@ El tráfico externo entra por **AWS API Gateway**, que reenvía a la EC2 (puerto
 
 ![docker ps](docs/screenshots/c4-docker-ps.png)
 
-**C5 — AWS API Gateway, rutas configuradas:**
+**C5 — AWS API Gateway, rutas configuradas (por método, sin `ANY`, para no bloquear el preflight CORS):**
 
-![Gateway routes](docs/screenshots/c5-gateway-routes.png)
+![Gateway integraciones por ruta](docs/screenshots/ev2-cors-2-integracion.png)
 
-**C6 — AWS API Gateway, `EntraID-Authorizer` (JWT Auth) asociado a las rutas protegidas:**
+**C6 — AWS API Gateway, `EntraID-Authorizer` (JWT Auth) asociado a cada ruta protegida:**
 
-![Gateway authorizer](docs/screenshots/c6-gateway-authorizer.png)
+![Gateway authorizer por ruta](docs/screenshots/ev2-cors-1-authorizer.png)
 
 **C7 — Prueba end-to-end vía Gateway (`/api/health` público, `/api/pedidos` protegido):**
 
@@ -209,4 +209,77 @@ El tráfico externo entra por **AWS API Gateway**, que reenvía a la EC2 (puerto
 
 ---
 
-_Repositorio entregado como parte de la Evaluación Parcial N°1 — DSY1107 Desarrollo Cloud Native I._
+## Evidencia de cumplimiento — Evaluación Parcial N°2
+
+### CORS configurado en el API Manager (AWS API Gateway)
+
+La rúbrica de la EV2 exige que el **API Manager** (no el backend) resuelva CORS. Las rutas se
+separaron por método (`GET`, `POST`, `PUT`, `DELETE`, todas con el `EntraID-Authorizer`) sin
+usar `ANY`, para que el `OPTIONS` de preflight no quede capturado por ninguna ruta protegida y
+el manejo automático de CORS de API Gateway lo resuelva directamente — sin pasar por el
+authorizer ni por el backend.
+
+**Rutas + integración por método:**
+
+![Integraciones por ruta](docs/screenshots/ev2-cors-2-integracion.png)
+
+**Authorizer JWT adjunto a cada ruta protegida:**
+
+![Authorizer por ruta](docs/screenshots/ev2-cors-1-authorizer.png)
+
+**Configuración de CORS en el Gateway (origin, headers, methods):**
+
+![CORS config](docs/screenshots/ev2-cors-config.png)
+
+**Prueba del preflight `OPTIONS` resuelto por el Gateway (204, sin pasar por el authorizer):**
+
+![CORS curl test](docs/screenshots/ev2-cors-curl-test.png)
+
+### Authorization Code + PKCE
+
+MSAL.js usa por defecto el flujo Authorization Code con PKCE para SPAs (no Implicit). Evidencia:
+
+**Request a `/authorize` con `code_challenge` y `code_challenge_method=S256`:**
+
+![Authorize con PKCE](docs/screenshots/ev2-pkce-1-authorize-url.png)
+
+**Canje del código por el token, con `code_verifier` y `grant_type=authorization_code`:**
+
+![Token payload con code_verifier](docs/screenshots/ev2-pkce-2-token-payload.png)
+
+### Validación JWT en las rutas — respuestas 200 / 401 / 403 coherentes
+
+**`GET /api/pedidos/1` sin token → 401:**
+
+![401 sin token](docs/screenshots/ev2-ruta-pedidos-id-401.png)
+
+**`GET /api/pedidos/1` con token válido → 200 con el JSON esperado:**
+
+![200 con token](docs/screenshots/ev2-ruta-pedidos-id-200.png)
+
+**`POST /api/pedidos` autenticado pero con un token sin el scope `OT.Create` (se usó el `id_token` en vez del `access_token`) → 403 Forbidden:**
+
+![403 sin scope](docs/screenshots/ev2-ruta-pedidos-post-403.png)
+
+Esto demuestra la diferencia entre **autenticación** (401 si no hay token válido) y **autorización**
+(403 si el token es válido pero no tiene el permiso/scope requerido) — ambas resueltas en el
+Gateway y reforzadas otra vez en el backend.
+
+**`GET /api/pedidos` (listado) con token → 200:** ver captura `b3-200-con-token.png` en la sección de la EV1 (mismo endpoint, misma evidencia, ya capturada).
+
+**`POST /api/pedidos` con token válido → 201 Created, con el pedido creado en la respuesta:**
+
+![201 headers](docs/screenshots/ev2-ruta-pedidos-post-201-headers.png)
+![201 body](docs/screenshots/ev2-ruta-pedidos-post-201-body.png)
+
+**`GET /api/clientes/me` con token válido → 200 con el perfil del cliente:**
+
+![me headers](docs/screenshots/ev2-ruta-clientes-me-200-headers.png)
+![me body](docs/screenshots/ev2-ruta-clientes-me-200-body.png)
+
+Tenant IDaaS y app registrada: ver secciones **C1, C2, C3** de la evidencia de la EV1 más
+arriba en este mismo README (mismo tenant, misma app, reutilizado directamente).
+
+---
+
+_Repositorio entregado como parte de la Evaluación Parcial N°1 y N°2 — DSY1107 Desarrollo Cloud Native I._
