@@ -121,10 +121,6 @@ El tráfico externo entra por **AWS API Gateway**, que reenvía a la EC2 (puerto
 
 ## Evidencia de cumplimiento — Evaluación Parcial N°1
 
-> Instrucciones: reemplaza cada línea `_(pendiente: ...)_` por la imagen correspondiente
-> usando `![descripción](docs/screenshots/NOMBRE.png)`. Guarda todas las capturas en
-> una carpeta `docs/screenshots/` en la raíz del repo (créala si no existe).
-
 ### A. Indicador 1 — Integración MSAL
 
 **A1 — Login redirige a Microsoft Entra ID (federado con DuocUC):**
