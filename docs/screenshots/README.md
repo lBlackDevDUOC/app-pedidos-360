@@ -1,10 +1,5 @@
 # Capturas de evidencia
 
-Guarda aquí las capturas para la sección "Evidencia de cumplimiento" del `README.md` raíz.
-Usa estos nombres de archivo exactos (cualquier extensión: `.png`, `.jpg`, `.webp`) — así
-puedo identificar automáticamente cuál va en cada casillero del README sin que me tengas
-que explicar cuál es cuál:
-
 ## A — MSAL (frontend)
 - `a1-login-microsoft.png` — pantalla de login redirigiendo a Microsoft
 - `a2-app-logueada.png` — app mostrando "¡Bienvenido, tu-correo!"
