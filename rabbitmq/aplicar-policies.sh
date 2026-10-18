@@ -5,7 +5,8 @@
 # UNA sola policy (la de mayor prioridad que calce con su nombre). Si una cola tiene
 # el límite por argumento y por policy, RabbitMQ aplica el MENOR de los dos.
 set -e
-API="http://rabbitmq:15672/api"
+# Las policies son globales del clúster: basta con aplicarlas en un nodo
+API="${RABBITMQ_API:-http://rabbitmq:15672/api}"
 AUTH="$RABBITMQ_USER:$RABBITMQ_PASSWORD"
 
 # 1) Ninguna cola puede crecer sin control: máximo 100.000 mensajes (descarta los más antiguos).

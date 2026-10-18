@@ -123,3 +123,44 @@ Si el stage no tiene auto-deploy, presiona **Deploy**.
 
 - Una t3.micro está en la capa gratuita (750 h/mes). **Dos encendidas todo el mes suman 1.500 h**: la segunda cuesta cerca de USD 7–8 al mes, más unos USD 3,6 al mes por cada IP pública.
 - Para ahorrar, deténlas (Instancia → Detener) cuando no las uses y enciéndelas antes de la presentación. Los datos se conservan (volúmenes Docker en el disco EBS).
+
+---
+
+## EP4: clúster RabbitMQ de 2 nodos
+
+La presentación de la EP4 exige *"dos nodos RabbitMQ configurados y su integración en un clúster"*. Siguiendo la guía
+2.3.1 del curso, la EC2-2 levanta con `docker compose` dos nodos (`rabbitmq-1` y `rabbitmq-2`) que comparten la misma
+Erlang cookie y forman un clúster automáticamente (`deploy/servidor-mensajeria/rabbitmq.conf`).
+
+```
+EC2-2 (t3.small)
+├─ rabbitmq-1  rabbit@pedidos360-rabbitmq-1  AMQP 5672  / UI 15672 ┐
+├─ rabbitmq-2  rabbit@pedidos360-rabbitmq-2  AMQP 5673  / UI 15673 ┘ clúster (puerto interno 25672)
+├─ ms-documentos, ms-notificaciones, ms-rabbit-admin → conectados a ambos nodos (eligen uno al azar)
+└─ ms-pedidos (EC2-1) → 172.31.23.170:5672 y :5673
+```
+
+### Pasos en la consola AWS
+
+1. **Cambiar la EC2-2 a `t3.small`** (2 GB: dos nodos RabbitMQ + 3 JVM no caben bien en 1 GB):
+   EC2 → instancia `pedidos360-mensajeria` → **Estado de la instancia → Detener** → **Acciones → Configuración de la
+   instancia → Cambiar el tipo de instancia** → `t3.small` → **Aplicar** → **Iniciar**. La IP elástica y la IP privada se mantienen.
+2. **Grupo de seguridad `pedidos360-mensajeria-sg`** → Editar reglas de entrada → agregar:
+
+| Tipo | Puerto | Origen | Por qué |
+|---|---|---|---|
+| TCP personalizado | 5673 | `sg-0f444c654aea109f2` (launch-wizard-1) | AMQP del nodo 2, solo para ms-pedidos (EC2-1) |
+| TCP personalizado | 15673 | **Mi IP** | Panel web del nodo 2 (opcional, para mostrarlo) |
+
+3. **Secret con la Erlang cookie** (una clave aleatoria; el comando la genera y la carga sin mostrarla):
+
+```bash
+openssl rand -hex 24 | gh secret set RABBITMQ_ERLANG_COOKIE --repo lBlackDevDUOC/app-pedidos-360
+```
+
+### Verificar después del despliegue
+
+- Panel http://54.172.159.172:15672 → **Overview → Nodes**: deben aparecer **2 nodos** en verde.
+- **Queues and Streams** → columna **Node**: las colas quedan repartidas entre `rabbitmq-1` y `rabbitmq-2`.
+- **Connections** → columna **Node**: los microservicios conectados a uno u otro nodo.
+- Desde SSH en la EC2-2: `sudo docker exec pedidos360-rabbitmq-1 rabbitmqctl cluster_status` → *Running Nodes* con los 2.

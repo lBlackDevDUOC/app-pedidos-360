@@ -1,58 +1,86 @@
-# Servidor de mensajería Pedidos360 (EC2-2, t3.micro).
+# Servidor de mensajería Pedidos360 (EC2-2, t3.small).
 # Lo despliega GitHub Actions (.github/workflows/deploy.yml): copia esta carpeta + los .jar y ejecuta
 #   docker compose up -d
-# Credenciales en el archivo .env que escribe el pipeline desde los secrets del repositorio.
+# Credenciales y Erlang cookie en el archivo .env que escribe el pipeline desde los secrets del repositorio.
 #
-# ms-pedidos (en la EC2-1) se conecta al puerto 5672 por la IP PRIVADA de esta instancia (misma VPC).
+# Clúster RabbitMQ de 2 nodos (rabbitmq-1 y rabbitmq-2) en la misma instancia, como en la guía 2.3.1.
+# ms-pedidos (en la EC2-1) se conecta a ambos nodos por la IP PRIVADA de esta instancia (puertos 5672 y 5673).
+
+x-rabbit: &rabbit
+  image: rabbitmq:4.2-management
+  restart: unless-stopped
+  environment: &rabbit-env
+    RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+    RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    # Secreto compartido: dos nodos solo forman clúster si tienen la misma cookie
+    RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE}
+  mem_limit: 384m
+  healthcheck:
+    test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+    interval: 15s
+    timeout: 10s
+    retries: 12
 
 x-java: &java
   restart: unless-stopped
   depends_on:
-    rabbitmq:
+    rabbitmq-1:
+      condition: service_healthy
+    rabbitmq-2:
       condition: service_healthy
   environment: &java-env
-    SPRING_RABBITMQ_HOST: rabbitmq
+    # Los microservicios conocen los dos nodos: si uno cae, se reconectan al otro
+    SPRING_RABBITMQ_ADDRESSES: rabbitmq-1:5672,rabbitmq-2:5672
+    # Cada microservicio elige un nodo al azar: las conexiones se reparten en el clúster
+    SPRING_RABBITMQ_ADDRESSSHUFFLEMODE: random
     SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER}
     SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
-    # Heap acotado: 3 JVM + RabbitMQ deben convivir en 1 GB (+ swap)
+    # Heap acotado: 3 JVM + 2 nodos RabbitMQ conviven en 2 GB (+ swap)
     JAVA_TOOL_OPTIONS: -Djava.net.preferIPv4Stack=true -Xms64m -Xmx160m -XX:MaxMetaspaceSize=110m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Xss512k
 
 services:
-  rabbitmq:
-    image: rabbitmq:4.2-management
-    container_name: pedidos360-rabbitmq
-    hostname: pedidos360-rabbitmq
-    restart: unless-stopped
+  # ---------------------------------------------------------------- Clúster RabbitMQ
+  rabbitmq-1:
+    <<: *rabbit
+    container_name: pedidos360-rabbitmq-1
+    hostname: pedidos360-rabbitmq-1   # nombre del nodo: rabbit@pedidos360-rabbitmq-1
     ports:
-      - "5672:5672"     # AMQP: el Security Group solo lo abre al Security Group de la EC2-1
+      - "5672:5672"     # AMQP nodo 1: el Security Group solo lo abre al Security Group de la EC2-1
       - "15672:15672"   # Management UI: el Security Group solo lo abre a tu IP
-    environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
       - ./rabbitmq.conf:/etc/rabbitmq/conf.d/90-pedidos360.conf:ro
-    mem_limit: 384m
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 15s
-      timeout: 10s
-      retries: 12
+      - rabbitmq1_data:/var/lib/rabbitmq
+
+  rabbitmq-2:
+    <<: *rabbit
+    container_name: pedidos360-rabbitmq-2
+    hostname: pedidos360-rabbitmq-2   # nombre del nodo: rabbit@pedidos360-rabbitmq-2
+    ports:
+      - "5673:5672"     # AMQP nodo 2 (mismo Security Group que el 5672)
+      - "15673:15672"   # Management UI del nodo 2
+    volumes:
+      - ./rabbitmq.conf:/etc/rabbitmq/conf.d/90-pedidos360.conf:ro
+      - rabbitmq2_data:/var/lib/rabbitmq
+    depends_on:
+      rabbitmq-1:
+        condition: service_healthy  # el nodo 2 se une al clúster que forma el nodo 1
 
   rabbitmq-policies:
     image: curlimages/curl:8.11.1
     container_name: pedidos360-rabbitmq-policies
     depends_on:
-      rabbitmq:
+      rabbitmq-2:
         condition: service_healthy
     volumes:
       - ./aplicar-policies.sh:/aplicar-policies.sh:ro
     environment:
+      RABBITMQ_API: http://rabbitmq-1:15672/api
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
     entrypoint: ["sh", "/aplicar-policies.sh"]
     restart: "no"
 
+  # ---------------------------------------------------------------- Microservicios
   ms-documentos:
     <<: *java
     image: pedidos360-ms-documentos:latest
@@ -73,9 +101,10 @@ services:
       - "8083:8083"     # API REST de administración (la publica el API Gateway)
     environment:
       <<: *java-env
-      APP_ADMIN_MANAGEMENT_URL: http://rabbitmq:15672/api
+      APP_ADMIN_MANAGEMENT_URL: http://rabbitmq-1:15672/api
       JAVA_TOOL_OPTIONS: -Djava.net.preferIPv4Stack=true -Xms64m -Xmx192m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Xss512k
     mem_limit: 384m
 
 volumes:
-  rabbitmq_data:
+  rabbitmq1_data:
+  rabbitmq2_data:

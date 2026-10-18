@@ -431,6 +431,14 @@ la EC2-1 mantiene frontend + `ms-pedidos` + PostgreSQL y la EC2-2 es el servidor
 `ms-pedidos` llega a RabbitMQ por IP privada y el puerto 5672 solo acepta conexiones desde el Security Group
 de la EC2-1. El pipeline de GitHub Actions ejecuta los tests de los 4 microservicios antes de desplegar.
 
+**Clúster RabbitMQ (EP4).** En la EC2-2 (t3.small) `docker compose` levanta **dos nodos** RabbitMQ
+(`rabbit@pedidos360-rabbitmq-1` y `rabbit@pedidos360-rabbitmq-2`) que comparten la Erlang cookie y forman un clúster
+automáticamente (`cluster_formation.peer_discovery_backend = classic_config`). Con `queue_leader_locator = balanced`
+las colas se reparten entre ambos nodos, y los microservicios conocen los dos (`spring.rabbitmq.addresses`): si un nodo
+cae, se reconectan al otro, y al volver el nodo sus colas y consumidores se recuperan solos. Las colas son *classic*
+(cada una vive en un nodo); para que una cola sobreviva a la caída de su nodo, el paso siguiente sería un clúster de
+3 nodos con *quorum queues*. Detalle y verificación: [`docs/guia-aws-ep3.md`](docs/guia-aws-ep3.md#ep4-clúster-rabbitmq-de-2-nodos).
+
 **Demostración de fallos** (simulación en `ms-documentos`, `app.simulacion` en su `application.yml`):
 
 | Total del pedido | Qué pasa |

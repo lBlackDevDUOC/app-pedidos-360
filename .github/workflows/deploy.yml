@@ -2,8 +2,8 @@ name: Deploy Pedidos360
 
 # Arquitectura (EP3):
 #   EC2-1 (EC2_HOST)     → frontend (Nginx) + ms-pedidos + PostgreSQL
-#   EC2-2 (MQ_EC2_HOST)  → RabbitMQ + ms-documentos + ms-notificaciones + ms-rabbit-admin
-#   Ambas en la misma VPC: ms-pedidos llega a RabbitMQ por la IP privada (MQ_PRIVATE_IP).
+#   EC2-2 (MQ_EC2_HOST)  → clúster RabbitMQ de 2 nodos + ms-documentos + ms-notificaciones + ms-rabbit-admin
+#   Ambas en la misma VPC: ms-pedidos llega a los 2 nodos por la IP privada (MQ_PRIVATE_IP, puertos 5672 y 5673).
 
 on:
   push:
@@ -65,30 +65,34 @@ jobs:
           source: "mensajeria"
           target: "/home/ec2-user"
 
-      - name: Desplegar RabbitMQ y microservicios en la EC2-2
+      - name: Desplegar clúster RabbitMQ y microservicios en la EC2-2
         uses: appleboy/ssh-action@v1.0.3
         env:
           RABBITMQ_USER: ${{ secrets.RABBITMQ_USER }}
           RABBITMQ_PASSWORD: ${{ secrets.RABBITMQ_PASSWORD }}
+          RABBITMQ_ERLANG_COOKIE: ${{ secrets.RABBITMQ_ERLANG_COOKIE }}
         with:
           host: ${{ secrets.MQ_EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: RABBITMQ_USER,RABBITMQ_PASSWORD
+          envs: RABBITMQ_USER,RABBITMQ_PASSWORD,RABBITMQ_ERLANG_COOKIE
           command_timeout: 20m
           script: |
             set -e
             cd /home/ec2-user/mensajeria
             sh preparar-ec2.sh
 
-            # Credenciales para docker compose (solo legibles por ec2-user)
-            printf 'RABBITMQ_USER=%s\nRABBITMQ_PASSWORD=%s\n' "$RABBITMQ_USER" "$RABBITMQ_PASSWORD" > .env
+            # Credenciales y Erlang cookie del clúster para docker compose (solo legibles por ec2-user)
+            printf 'RABBITMQ_USER=%s\nRABBITMQ_PASSWORD=%s\nRABBITMQ_ERLANG_COOKIE=%s\n' \
+              "$RABBITMQ_USER" "$RABBITMQ_PASSWORD" "$RABBITMQ_ERLANG_COOKIE" > .env
             chmod 600 .env
 
             sudo docker build -q -f Dockerfile.jar --build-arg JAR=documentos/app.jar     -t pedidos360-ms-documentos .
             sudo docker build -q -f Dockerfile.jar --build-arg JAR=notificaciones/app.jar -t pedidos360-ms-notificaciones .
             sudo docker build -q -f Dockerfile.jar --build-arg JAR=rabbit-admin/app.jar   -t pedidos360-ms-rabbit-admin .
 
+            # EP3 tenía un solo nodo ("pedidos360-rabbitmq"): se retira para liberar los puertos del clúster
+            sudo docker rm -f pedidos360-rabbitmq 2>/dev/null || true
             sudo docker compose up -d --remove-orphans --force-recreate
             sudo docker image prune -f
             sudo docker compose ps
@@ -169,7 +173,8 @@ jobs:
               -e SPRING_DATASOURCE_URL=jdbc:postgresql://pedidos360-db:5432/pedidos360_db \
               -e DB_USERNAME="$DB_USERNAME" \
               -e DB_PASSWORD="$DB_PASSWORD" \
-              -e SPRING_RABBITMQ_HOST="$MQ_PRIVATE_IP" \
+              -e SPRING_RABBITMQ_ADDRESSES="$MQ_PRIVATE_IP:5672,$MQ_PRIVATE_IP:5673" \
+              -e SPRING_RABBITMQ_ADDRESSSHUFFLEMODE=random \
               -e SPRING_RABBITMQ_USERNAME="$RABBITMQ_USER" \
               -e SPRING_RABBITMQ_PASSWORD="$RABBITMQ_PASSWORD" \
               --restart unless-stopped \
