@@ -1,0 +1,57 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: ms-rabbit-admin
+
+  # ---------------------------------------------------------------- Seguridad (Microsoft Entra ID, misma app que ms-pedidos)
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://login.microsoftonline.com/bb5324af-c266-41ed-b36c-a971641c7af2/v2.0
+          audiences: d4b53b0b-a9b3-42b4-b63d-71d24f58813b
+
+  # ---------------------------------------------------------------- Conexión AMQP (AmqpAdmin)
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:localhost}
+    port: 5672
+    username: ${SPRING_RABBITMQ_USERNAME:pedidos360}
+    password: ${SPRING_RABBITMQ_PASSWORD:pedidos360}
+
+  jackson:
+    mapper:
+      accept-case-insensitive-enums: true   # "topic" y "TOPIC" son válidos como tipo de exchange
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+app:
+  admin:
+    # API HTTP del plugin de Management (lecturas: listar colas con sus métricas, exchanges y bindings)
+    management:
+      url: ${APP_ADMIN_MANAGEMENT_URL:http://localhost:15672/api}
+      vhost: /
+      usuario: ${spring.rabbitmq.username}
+      clave: ${spring.rabbitmq.password}
+    # Recursos del sistema Pedidos360: la API no permite crearlos ni eliminarlos (sí purgarlos)
+    prefijos-protegidos:
+      - pedidos360.
+      - pedidos.
+      - documentos.
+      - notificaciones.
+    # Alertas: revisa periódicamente las DLQ y avisa en el log si acumulan mensajes
+    alertas:
+      intervalo-ms: 30000
+      sufijo-dlq: .dlq
+      umbral-mensajes: 1
+    cors:
+      allowed-origins: http://localhost:4200,http://52.86.170.189

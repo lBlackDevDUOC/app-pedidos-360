@@ -1,0 +1,83 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: ms-pedidos
+
+  # ---------------------------------------------------------------- Seguridad (Microsoft Entra ID)
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Emisor de los tokens: Spring descarga las claves públicas (JWKS) desde este issuer
+          issuer-uri: https://login.microsoftonline.com/bb5324af-c266-41ed-b36c-a971641c7af2/v2.0
+          # Audience (claim "aud"): Client ID de la app registrada en Entra ID
+          audiences: d4b53b0b-a9b3-42b4-b63d-71d24f58813b
+
+  # ---------------------------------------------------------------- Base de datos PostgreSQL
+  datasource:
+    url: jdbc:postgresql://localhost:5432/pedidos360_db   # en Docker se sobrescribe con SPRING_DATASOURCE_URL
+    username: ${DB_USERNAME:pedidos360}
+    password: ${DB_PASSWORD:pedidos360}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+
+  # ---------------------------------------------------------------- Conexión a RabbitMQ
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:localhost}
+    port: 5672
+    username: ${SPRING_RABBITMQ_USERNAME:pedidos360}
+    password: ${SPRING_RABBITMQ_PASSWORD:pedidos360}
+    # Publisher confirms: el broker confirma (ack/nack) cada mensaje publicado
+    publisher-confirm-type: correlated
+    # Publisher returns: avisa si un mensaje no calzó con ninguna cola (routing key sin binding)
+    publisher-returns: true
+    template:
+      mandatory: true
+    listener:
+      simple:
+        # ACK manual: el consumidor confirma explícitamente con basicAck / basicNack
+        acknowledge-mode: manual
+        # Prefetch: máximo de mensajes sin confirmar entregados a cada consumidor (reparto justo)
+        prefetch: 5
+        concurrency: 1
+        max-concurrency: 3
+        # Un mensaje rechazado nunca se re-encola en bucle: va al DLX
+        default-requeue-rejected: false
+
+# ---------------------------------------------------------------- Topología de mensajería (centralizada)
+# Todos los nombres de exchanges, colas y routing keys del microservicio se definen SOLO aquí.
+# Las clases Java los leen a través de RabbitProperties (@ConfigurationProperties).
+app:
+  rabbitmq:
+    exchanges:
+      eventos: pedidos360.events       # topic: eventos de negocio entre microservicios
+      reintentos: pedidos360.retry     # direct: envía mensajes fallidos a su cola de reintento
+      dead-letter: pedidos360.dlx      # direct: DLX, envía mensajes muertos a su DLQ
+    routing-keys:
+      pedido-creado: pedido.creado
+      documento-generado: documento.generado
+    colas:
+      # ms-pedidos consume "documento.generado" para guardar el N° de comprobante en el pedido
+      documento-generado:
+        nombre: pedidos.documento-generado.q
+        reintento: pedidos.documento-generado.retry
+        dlq: pedidos.documento-generado.dlq
+    reintentos:
+      maximo: 3            # reintentos antes de enviar a la DLQ
+      espera-ms: 5000      # TTL de la cola de reintento = espera entre intentos
+    retencion:
+      ttl-cola-ms: 600000          # 10 min: un mensaje sin procesar expira y pasa a la DLQ
+      max-mensajes-cola: 1000      # al superar el límite se descartan los más antiguos (a la DLQ)
+      ttl-dlq-ms: 86400000         # 24 h en cuarentena y luego se elimina
+      max-mensajes-dlq: 5000
+
+# Orígenes permitidos por CORS (frontend Angular)
+pedidos360:
+  cors:
+    allowed-origins: http://localhost:4200,http://52.86.170.189

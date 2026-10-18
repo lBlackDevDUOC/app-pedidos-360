@@ -1,0 +1,7 @@
+# Imagen de ejecución para los microservicios del servidor de mensajería.
+# El .jar ya viene compilado y probado desde GitHub Actions: la EC2 (1 GB) no compila nada.
+FROM eclipse-temurin:21-jre-alpine
+ARG JAR
+WORKDIR /app
+COPY ${JAR} app.jar
+ENTRYPOINT ["java", "-jar", "app.jar"]

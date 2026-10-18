@@ -22,9 +22,11 @@ export function msalInstanceFactory(): IPublicClientApplication {
 export function msalInterceptorConfigFactory(): MsalInterceptorConfiguration {
   const protectedResourceMap = new Map<string, Array<string>>([
     [`${environment.apiBaseUrl}/*`, environment.azure.protectedResourceScopes],
+    [`${environment.adminApiBaseUrl}/*`, environment.azure.protectedResourceScopes],
     ['https://gsk99c2ala.execute-api.us-east-1.amazonaws.com/*', environment.azure.protectedResourceScopes],
-    ['http://54.242.195.23:8080/*', environment.azure.protectedResourceScopes],
+    ['http://52.86.170.189:8080/*', environment.azure.protectedResourceScopes],
     ['http://localhost:8080/*', environment.azure.protectedResourceScopes],
+    ['http://localhost:8083/*', environment.azure.protectedResourceScopes],
   ]);
 
   return {

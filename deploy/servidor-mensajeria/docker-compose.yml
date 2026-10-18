@@ -1,0 +1,81 @@
+# Servidor de mensajería Pedidos360 (EC2-2, t3.micro).
+# Lo despliega GitHub Actions (.github/workflows/deploy.yml): copia esta carpeta + los .jar y ejecuta
+#   docker compose up -d
+# Credenciales en el archivo .env que escribe el pipeline desde los secrets del repositorio.
+#
+# ms-pedidos (en la EC2-1) se conecta al puerto 5672 por la IP PRIVADA de esta instancia (misma VPC).
+
+x-java: &java
+  restart: unless-stopped
+  depends_on:
+    rabbitmq:
+      condition: service_healthy
+  environment: &java-env
+    SPRING_RABBITMQ_HOST: rabbitmq
+    SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER}
+    SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+    # Heap acotado: 3 JVM + RabbitMQ deben convivir en 1 GB (+ swap)
+    JAVA_TOOL_OPTIONS: -Djava.net.preferIPv4Stack=true -Xms64m -Xmx160m -XX:MaxMetaspaceSize=110m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Xss512k
+
+services:
+  rabbitmq:
+    image: rabbitmq:4.2-management
+    container_name: pedidos360-rabbitmq
+    hostname: pedidos360-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"     # AMQP: el Security Group solo lo abre al Security Group de la EC2-1
+      - "15672:15672"   # Management UI: el Security Group solo lo abre a tu IP
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./rabbitmq.conf:/etc/rabbitmq/conf.d/90-pedidos360.conf:ro
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+
+  rabbitmq-policies:
+    image: curlimages/curl:8.11.1
+    container_name: pedidos360-rabbitmq-policies
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./aplicar-policies.sh:/aplicar-policies.sh:ro
+    environment:
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+    entrypoint: ["sh", "/aplicar-policies.sh"]
+    restart: "no"
+
+  ms-documentos:
+    <<: *java
+    image: pedidos360-ms-documentos:latest
+    container_name: pedidos360-ms-documentos
+    mem_limit: 320m
+
+  ms-notificaciones:
+    <<: *java
+    image: pedidos360-ms-notificaciones:latest
+    container_name: pedidos360-ms-notificaciones
+    mem_limit: 320m
+
+  ms-rabbit-admin:
+    <<: *java
+    image: pedidos360-ms-rabbit-admin:latest
+    container_name: pedidos360-ms-rabbit-admin
+    ports:
+      - "8083:8083"     # API REST de administración (la publica el API Gateway)
+    environment:
+      <<: *java-env
+      APP_ADMIN_MANAGEMENT_URL: http://rabbitmq:15672/api
+      JAVA_TOOL_OPTIONS: -Djava.net.preferIPv4Stack=true -Xms64m -Xmx192m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Xss512k
+    mem_limit: 384m
+
+volumes:
+  rabbitmq_data:

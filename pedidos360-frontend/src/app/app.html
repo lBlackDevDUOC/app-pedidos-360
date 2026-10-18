@@ -52,6 +52,7 @@
             <th style="padding: 8px;">Total</th>
             <th style="padding: 8px;">Estado</th>
             <th style="padding: 8px;">Fecha</th>
+            <th style="padding: 8px;">Comprobante</th>
           </tr>
         </thead>
         <tbody>
@@ -61,10 +62,20 @@
               <td style="padding: 8px;">{{ p.total | number: '1.0-0' }}</td>
               <td style="padding: 8px;">{{ p.estado }}</td>
               <td style="padding: 8px;">{{ p.fechaCreacion | date: 'dd/MM/yyyy HH:mm' }}</td>
+              <td style="padding: 8px;">
+                @if (p.numeroComprobante) {
+                  {{ p.numeroComprobante }}
+                } @else {
+                  <span style="color: #888;" title="Se emite en segundo plano (RabbitMQ). Recarga en unos segundos.">en proceso…</span>
+                }
+              </td>
             </tr>
           }
         </tbody>
       </table>
     }
+
+    <hr style="margin: 20px 0;" />
+    <app-estado-colas />
   }
 </div>

@@ -27,6 +27,10 @@ public class Pedido {
     private String estado;
     private LocalDateTime fechaCreacion = LocalDateTime.now();
 
+    /** N° de comprobante emitido por ms-documentos (llega por RabbitMQ, evento documento.generado). */
+    private String numeroComprobante;
+    private LocalDateTime fechaComprobante;
+
     public Pedido() {}
 
     public Pedido(Cliente cliente, Double total, String estado) {
@@ -50,4 +54,10 @@ public class Pedido {
 
     public LocalDateTime getFechaCreacion() { return fechaCreacion; }
     public void setFechaCreacion(LocalDateTime fechaCreacion) { this.fechaCreacion = fechaCreacion; }
+
+    public String getNumeroComprobante() { return numeroComprobante; }
+    public void setNumeroComprobante(String numeroComprobante) { this.numeroComprobante = numeroComprobante; }
+
+    public LocalDateTime getFechaComprobante() { return fechaComprobante; }
+    public void setFechaComprobante(LocalDateTime fechaComprobante) { this.fechaComprobante = fechaComprobante; }
 }

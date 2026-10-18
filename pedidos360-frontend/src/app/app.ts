@@ -3,12 +3,13 @@ import { DatePipe, DecimalPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MsalService } from '@azure/msal-angular';
 import { Cliente, Pedido, PedidoRequest, PedidoService } from './pedido.service';
+import { EstadoColas } from './estado-colas';
 
 @Component({
   selector: 'app-root',
   templateUrl: './app.html',
   standalone: true,
-  imports: [FormsModule, DatePipe, DecimalPipe],
+  imports: [FormsModule, DatePipe, DecimalPipe, EstadoColas],
   styleUrl: './app.css',
 })
 export class App implements OnInit {

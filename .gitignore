@@ -1,2 +1,14 @@
 /Pedidos360.pem
 /docs/presentacion-guion.md
+/docs/defensa-ep3.md
+
+# IDE: configuración local de cada desarrollador, no pertenece al repositorio
+.idea/
+.vscode/
+*.iml
+
+# Variables locales con credenciales (usar .env.example como plantilla)
+.env
+
+# Configuración local de Claude Code
+.claude/

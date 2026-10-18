@@ -1,0 +1,58 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: ms-notificaciones
+
+  # ---------------------------------------------------------------- Conexión a RabbitMQ
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:localhost}
+    port: 5672
+    username: ${SPRING_RABBITMQ_USERNAME:pedidos360}
+    password: ${SPRING_RABBITMQ_PASSWORD:pedidos360}
+    publisher-confirm-type: correlated   # usado al reprogramar reintentos
+    publisher-returns: true
+    template:
+      mandatory: true
+    listener:
+      simple:
+        acknowledge-mode: manual     # ACK explícito con basicAck / basicNack
+        prefetch: 10                 # enviar emails es rápido: se admite un buffer mayor
+        concurrency: 1
+        max-concurrency: 3
+        default-requeue-rejected: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+# ---------------------------------------------------------------- Topología de mensajería (centralizada)
+app:
+  rabbitmq:
+    exchanges:
+      eventos: pedidos360.events
+      reintentos: pedidos360.retry
+      dead-letter: pedidos360.dlx
+    routing-keys:
+      pedido-creado: pedido.creado
+      documento-generado: documento.generado
+    colas:
+      pedido-creado:          # email "recibimos tu pedido"
+        nombre: notificaciones.pedido-creado.q
+        reintento: notificaciones.pedido-creado.retry
+        dlq: notificaciones.pedido-creado.dlq
+      documento-generado:     # email "tu comprobante está listo"
+        nombre: notificaciones.documento-generado.q
+        reintento: notificaciones.documento-generado.retry
+        dlq: notificaciones.documento-generado.dlq
+    reintentos:
+      maximo: 3
+      espera-ms: 5000
+    retencion:
+      ttl-cola-ms: 600000
+      max-mensajes-cola: 1000
+      ttl-dlq-ms: 86400000
+      max-mensajes-dlq: 5000

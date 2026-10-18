@@ -1,7 +1,8 @@
-# Pedidos360 — Evaluación Parcial N°1 (DSY1107)
+# Pedidos360 — DSY1107 Desarrollo Cloud Native I
 
-Sistema de pedidos con frontend en Angular (MSAL / Azure AD) y backend en Spring Boot,
-desplegado en AWS EC2 y protegido mediante AWS API Gateway.
+Sistema de pedidos con frontend en Angular (MSAL / Azure AD) y backend de microservicios en Spring Boot,
+desplegado en AWS EC2 y protegido mediante AWS API Gateway. Desde la EP3 los microservicios se comunican
+de forma asíncrona con **RabbitMQ** → ver [Evaluación Parcial N°3](#evaluación-parcial-n3--mensajería-asíncrona-con-rabbitmq).
 
 ## Índice
 
@@ -12,6 +13,7 @@ desplegado en AWS EC2 y protegido mediante AWS API Gateway.
 - [Seguridad: autenticación y autorización](#seguridad-autenticación-y-autorización)
 - [Despliegue en AWS](#despliegue-en-aws)
 - [Evidencia de cumplimiento — Evaluación Parcial N°1](#evidencia-de-cumplimiento--evaluación-parcial-n1)
+- [Evaluación Parcial N°3 — Mensajería asíncrona con RabbitMQ](#evaluación-parcial-n3--mensajería-asíncrona-con-rabbitmq)
 
 ## Arquitectura
 
@@ -77,9 +79,14 @@ Esta doble validación (Gateway + Backend) es intencional: cumple tanto el rol d
 
 ```
 .
-├── pedidos360-frontend/   # Angular + MSAL
-├── pedidos360-backend/    # Spring Boot (API REST + seguridad JWT)
-└── .github/workflows/     # Pipeline de despliegue a EC2
+├── pedidos360-frontend/        # Angular + MSAL
+├── pedidos360-backend/         # ms-pedidos: API REST + JWT + PostgreSQL; productor/consumidor RabbitMQ
+├── pedidos360-documentos/      # ms-documentos: emite comprobantes (consumidor/productor)
+├── pedidos360-notificaciones/  # ms-notificaciones: emails al cliente (consumidor)
+├── pedidos360-rabbit-admin/    # ms-rabbit-admin: API REST para administrar RabbitMQ
+├── rabbitmq/                   # policies de retención aplicadas al levantar el broker
+├── docker-compose.yml          # RabbitMQ + PostgreSQL (+ los 4 microservicios con --profile app)
+└── .github/workflows/          # Pipeline de despliegue a EC2
 ```
 
 ## Cómo correr el proyecto localmente
@@ -282,4 +289,177 @@ arriba en este mismo README (mismo tenant, misma app, reutilizado directamente).
 
 ---
 
-_Repositorio entregado como parte de la Evaluación Parcial N°1 y N°2 — DSY1107 Desarrollo Cloud Native I._
+## Evaluación Parcial N°3 — Mensajería asíncrona con RabbitMQ
+
+Al crear un pedido, la emisión del comprobante y el envío de emails ya no ocurren dentro de la petición HTTP:
+`ms-pedidos` guarda el pedido, publica un evento y responde de inmediato. Otros microservicios procesan el
+evento en segundo plano. Si uno de ellos está caído, el mensaje espera en su cola; si falla, se reintenta y,
+si no se puede procesar, queda en una DLQ para revisión. La lógica existente (login, JWT, pedidos) no cambió.
+
+### Flujo de mensajes
+
+```
+                         POST /api/pedidos (JWT)
+ Angular ───────────────────────────────▶ ms-pedidos ──guarda──▶ PostgreSQL
+                                             │
+                                  publica "pedido.creado"
+                                             ▼
+                        ┌──────── [pedidos360.events] (topic) ────────┐
+                        ▼                                              ▼
+           documentos.pedido-creado.q                  notificaciones.pedido-creado.q
+                        │                                              │
+                  ms-documentos                                 ms-notificaciones
+            emite comprobante BOL-000…                      email "recibimos tu pedido"
+                        │
+             publica "documento.generado"
+                        ▼
+                        ┌──────── [pedidos360.events] (topic) ────────┐
+                        ▼                                              ▼
+           pedidos.documento-generado.q              notificaciones.documento-generado.q
+                        │                                              │
+                   ms-pedidos                                   ms-notificaciones
+          guarda N° de comprobante en el pedido          email "tu comprobante está listo"
+
+ Cada cola de trabajo tiene:
+   error recuperable  → [pedidos360.retry] → <cola>.retry (espera TTL) → vuelve a la cola
+   error definitivo   → [pedidos360.dlx]   → <cola>.dlq   (cuarentena, alerta en ms-rabbit-admin)
+```
+
+### Microservicios
+
+| Microservicio | Puerto | Rol en RabbitMQ | Seguridad |
+|---|---|---|---|
+| `ms-pedidos` (`pedidos360-backend`) | 8080 | Produce `pedido.creado`; consume `documento.generado` | JWT Entra ID + scope `OT.Create` |
+| `ms-documentos` | 8081 | Consume `pedido.creado`; produce `documento.generado` | Sin API de negocio (solo `/actuator/health`) |
+| `ms-notificaciones` | 8082 | Consume `pedido.creado` y `documento.generado` | Sin API de negocio (solo `/actuator/health`) |
+| `ms-rabbit-admin` | 8083 | Crea/elimina colas, exchanges y bindings; monitorea DLQ | JWT Entra ID |
+
+Cada microservicio organiza la mensajería en paquetes separados del negocio:
+
+```
+messaging/
+├── config/      RabbitProperties (nombres desde application.yml), RabbitTopologyConfig (beans), RabbitInfraConfig
+├── event/       contratos JSON de los eventos
+├── producer/    interfaz XxxEventPublisher + implementación RabbitMQ
+├── consumer/    @RabbitListener agrupados por dominio: consumer/pedidos, consumer/documentos
+└── support/     MensajeLector (JSON + validación) y ReintentoHandler (reintento / DLQ)
+service/         lógica de negocio: no importa nada de RabbitMQ (verificado con ArchUnit)
+```
+
+### Configuración centralizada
+
+Todos los nombres de exchanges, colas y routing keys están **solo** en el bloque `app.rabbitmq` del
+`application.yml` de cada microservicio y se leen con `@ConfigurationProperties` (`RabbitProperties`).
+Los `@RabbitListener` usan placeholders (`${app.rabbitmq.colas.pedido-creado.nombre}`). El test
+`ConfiguracionCentralizadaTest` recorre el código fuente y falla si encuentra un nombre escrito a mano.
+
+### Confirmación de mensajes (ACK manual) y manejo de errores
+
+`acknowledge-mode: manual` en todos los consumidores. Cada `@RabbitListener` decide explícitamente:
+
+| Situación | Ejemplo | Decisión | Resultado |
+|---|---|---|---|
+| Procesado correctamente | comprobante emitido | `basicAck` | RabbitMQ elimina el mensaje |
+| Error **no recuperable** | JSON corrupto, campos obligatorios faltantes, pedido inexistente, email inválido | `basicNack(requeue=false)` | DLX → `.dlq` sin reintentar (reintentar daría el mismo error) |
+| Error **recuperable** | BD caída, servicio externo con timeout, broker sin conexión al publicar | `ReintentoHandler`: copia a `.retry` con header `x-reintentos` + `basicAck` | Vuelve a la cola tras el TTL (5 s); máx. 3 reintentos |
+| Reintentos agotados | el servicio sigue caído | `basicNack(requeue=false)` | DLX → `.dlq` |
+| El consumidor muere a mitad del proceso | se detiene el contenedor | (sin ACK) | RabbitMQ re-entrega el mensaje: no se pierde |
+
+- Nunca se usa `requeue=true`: re-encolar al instante genera un bucle que satura al consumidor.
+- Entrega "al menos una vez" → los consumidores son **idempotentes** (el N° de comprobante se deriva del id del pedido; `registrarComprobante` ignora duplicados).
+- Productores: mensajes **persistentes** + colas/exchanges **durables**; *publisher confirms* y *returns* registran en el log si el broker rechaza un mensaje o si no tiene ruta.
+- `prefetch` (5 / 10) limita los mensajes sin confirmar por consumidor (reparto justo, sin saturar memoria).
+- Cada decisión queda en el log con etiquetas `[ACK]`, `[REINTENTO n/3]`, `[NACK->DLQ]`, `[DLQ]`.
+
+### Retención y limpieza
+
+| Dónde | Límite | Efecto |
+|---|---|---|
+| Colas de trabajo (`x-message-ttl`) | 10 min | Un mensaje que nadie procesa expira y pasa a la DLQ |
+| Colas de trabajo (`x-max-length` + `drop-head`) | 1.000 mensajes | Al desbordar se descartan los más antiguos hacia la DLQ |
+| DLQ (`x-message-ttl`, `x-max-length`) | 24 h / 5.000 mensajes | La cuarentena se limpia sola |
+| Colas `.retry` (`x-message-ttl`) | 5 s | Espera entre reintentos |
+| Policy `retencion-global` (broker) | 100.000 mensajes | Red de seguridad para cualquier cola (ej. creadas por la API admin) |
+| Policy `retencion-dlq` (broker) | 7 días / 10.000 mensajes | Red de seguridad para cualquier `*.dlq` |
+
+Las policies se aplican automáticamente con `rabbitmq/aplicar-policies.sh` al levantar `docker compose`.
+`ms-rabbit-admin` revisa las DLQ cada 30 s y deja un `[ALERTA-DLQ]` en el log si tienen mensajes
+(también en `GET /api/admin/alerts` y en el panel de Angular).
+
+### API del microservicio administrador (`ms-rabbit-admin`)
+
+Swagger UI: `http://localhost:8083/swagger-ui.html` (botón **Authorize** → pegar el access token de Microsoft).
+
+| Método | Ruta | Respuesta |
+|---|---|---|
+| `GET` | `/api/admin/queues` | 200 — colas con mensajes listos / sin confirmar / consumidores |
+| `GET` | `/api/admin/queues/{nombre}` | 200 / 404 |
+| `POST` | `/api/admin/queues` | 201 + `Location` / 400 validación / 409 ya existe o protegida / 422 DLX inexistente |
+| `DELETE` | `/api/admin/queues/{nombre}` | 204 / 404 / 409 protegida |
+| `DELETE` | `/api/admin/queues/{nombre}/messages` | 200 — purga (vacía la cola sin eliminarla) |
+| `GET` | `/api/admin/exchanges` | 200 |
+| `POST` | `/api/admin/exchanges` | 201 / 400 (tipo distinto de DIRECT, TOPIC, FANOUT, HEADERS) / 409 |
+| `DELETE` | `/api/admin/exchanges/{nombre}` | 204 / 404 / 409 |
+| `GET` | `/api/admin/bindings` | 200 |
+| `POST` | `/api/admin/bindings` | 201 / 404 cola o exchange inexistente / 409 |
+| `DELETE` | `/api/admin/bindings?exchange=&cola=&routingKey=` | 204 / 404 |
+| `GET` | `/api/admin/alerts` | 200 — DLQ con mensajes |
+
+- Toda la lógica está en `RabbitAdminService` (escrituras con `AmqpAdmin`, lecturas con la API HTTP de Management); los controladores solo llaman a sus métodos.
+- Validación con DTOs (`@NotBlank`, `@Pattern`, `@Positive`, `@Max`, `@AssertTrue`) y errores RFC 7807 con detalle por campo. No se aceptan nombres vacíos, con espacios, con el prefijo reservado `amq.`, TTL/largos ≤ 0, routing key de DLX sin exchange DLX, ni tipos de exchange inexistentes.
+- Las colas y exchanges del sistema (prefijos `pedidos360.`, `pedidos.`, `documentos.`, `notificaciones.`) están protegidos: se pueden purgar pero no eliminar.
+- Peticiones de ejemplo: [`docs/pruebas-rabbit-admin.http`](docs/pruebas-rabbit-admin.http).
+
+### Cómo ejecutar
+
+Requisitos: Docker Desktop, JDK 21, Node 22.
+
+```bash
+# 1) RabbitMQ + PostgreSQL + los 4 microservicios
+docker compose --profile app up -d --build
+
+# 2) Frontend (apunta a localhost:8080 y localhost:8083)
+cd pedidos360-frontend && npm install && npx ng serve
+```
+
+- App: `http://localhost:4200` · RabbitMQ Management: `http://localhost:15672` (`pedidos360` / `pedidos360`)
+- Para correr los microservicios desde IntelliJ: `docker compose up -d` (solo RabbitMQ y PostgreSQL) y ejecutar cada `*Application`.
+
+**En AWS** se usan dos EC2 t3.micro en la misma VPC (ver [`docs/guia-aws-ep3.md`](docs/guia-aws-ep3.md)):
+la EC2-1 mantiene frontend + `ms-pedidos` + PostgreSQL y la EC2-2 es el servidor de mensajería
+(RabbitMQ + `ms-documentos` + `ms-notificaciones` + `ms-rabbit-admin`, `deploy/servidor-mensajeria/`).
+`ms-pedidos` llega a RabbitMQ por IP privada y el puerto 5672 solo acepta conexiones desde el Security Group
+de la EC2-1. El pipeline de GitHub Actions ejecuta los tests de los 4 microservicios antes de desplegar.
+
+**Demostración de fallos** (simulación en `ms-documentos`, `app.simulacion` en su `application.yml`):
+
+| Total del pedido | Qué pasa |
+|---|---|
+| cualquier otro | Flujo normal: comprobante emitido y 2 emails |
+| `7` | Falla el 1er intento, `[REINTENTO 1/3]` y se recupera |
+| `13` | Falla siempre: 3 reintentos y termina en `documentos.pedido-creado.dlq` |
+| `666` | Error no recuperable: va directo a la DLQ, sin reintentos |
+
+### Pruebas automáticas
+
+```bash
+cd pedidos360-backend && mvn test        # 20 tests
+cd pedidos360-documentos && mvn test     # 16 tests
+cd pedidos360-notificaciones && mvn test # 15 tests
+cd pedidos360-rabbit-admin && mvn test   # 39 tests
+```
+
+| Criterio de la rúbrica | Dónde está | Test que lo verifica |
+|---|---|---|
+| Nombres centralizados (12%) | `application.yml` → `RabbitProperties` | `ConfiguracionCentralizadaTest` (falla si hay nombres escritos a mano) |
+| Beans Queue / Exchange / Binding (13%) | `RabbitTopologyConfig` de cada microservicio | `ConfiguracionCentralizadaTest`, `RabbitAdminServiceTest` |
+| Configuración separada del negocio (10%) | paquete `messaging/` vs `service/` | `ArquitecturaTest` (ArchUnit) |
+| `@RabbitListener` por dominio (15%) | `messaging/consumer/{pedidos,documentos}` | `ArquitecturaTest`, `*ListenerTest` |
+| ACK y manejo de errores (20%) | `*Listener` + `ReintentoHandler` | `*ListenerTest`, `ReintentoHandlerTest` |
+| API REST del administrador (13%) | `ColaController`, `ExchangeController`, `BindingController` | `AdminApiTest` |
+| Lógica en `RabbitAdminService` (10%) | `RabbitAdminService` | `RabbitAdminServiceTest`, `ArquitecturaTest` |
+| Validación de entrada (7%) | DTOs + `ErroresApiHandler` | `AdminApiTest` |
+
+---
+
+_Repositorio entregado como parte de las Evaluaciones Parciales N°1, N°2 y N°3 — DSY1107 Desarrollo Cloud Native I._

@@ -1,0 +1,122 @@
+# Pedidos360 — entorno local completo (EP3: mensajería asíncrona con RabbitMQ)
+#
+# Solo infraestructura (para correr los microservicios desde IntelliJ):
+#   docker compose up -d
+# Infraestructura + los 4 microservicios en contenedores:
+#   docker compose --profile app up -d --build
+#
+# RabbitMQ Management UI: http://localhost:15672 (usuario/clave del archivo .env)
+
+services:
+  rabbitmq:
+    image: rabbitmq:4.2-management
+    container_name: pedidos360-rabbitmq
+    hostname: pedidos360-rabbitmq   # el nodo guarda sus datos según el hostname
+    ports:
+      - "5672:5672"     # AMQP (microservicios)
+      - "15672:15672"   # Management UI + API HTTP (ms-rabbit-admin)
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-pedidos360}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-pedidos360}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq   # colas durables y mensajes persistentes sobreviven reinicios
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Aplica una policy de retención global (red de seguridad para colas creadas sin límites,
+  # por ejemplo desde ms-rabbit-admin). Se ejecuta una vez y termina.
+  rabbitmq-policies:
+    image: curlimages/curl:8.11.1
+    container_name: pedidos360-rabbitmq-policies
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./rabbitmq/aplicar-policies.sh:/aplicar-policies.sh:ro
+    environment:
+      RABBITMQ_USER: ${RABBITMQ_USER:-pedidos360}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-pedidos360}
+    entrypoint: ["sh", "/aplicar-policies.sh"]
+    restart: "no"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: pedidos360-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: pedidos360_db
+      POSTGRES_USER: ${DB_USERNAME:-pedidos360}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-pedidos360}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d pedidos360_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------- microservicios
+  ms-pedidos:
+    profiles: ["app"]
+    build: ./pedidos360-backend
+    container_name: pedidos360-ms-pedidos
+    ports:
+      - "8080:8080"
+    environment: &rabbit-env
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER:-pedidos360}
+      SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-pedidos360}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/pedidos360_db
+      DB_USERNAME: ${DB_USERNAME:-pedidos360}
+      DB_PASSWORD: ${DB_PASSWORD:-pedidos360}
+      # Docker Desktop no tiene salida IPv6: sin esto Java intenta llegar a Microsoft (JWKS del JWT)
+      # por IPv6, falla con "Network unreachable" y todas las peticiones con token responden 401
+      JAVA_TOOL_OPTIONS: -Djava.net.preferIPv4Stack=true
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  ms-documentos:
+    profiles: ["app"]
+    build: ./pedidos360-documentos
+    container_name: pedidos360-ms-documentos
+    ports:
+      - "8081:8081"
+    environment: *rabbit-env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  ms-notificaciones:
+    profiles: ["app"]
+    build: ./pedidos360-notificaciones
+    container_name: pedidos360-ms-notificaciones
+    ports:
+      - "8082:8082"
+    environment: *rabbit-env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  ms-rabbit-admin:
+    profiles: ["app"]
+    build: ./pedidos360-rabbit-admin
+    container_name: pedidos360-ms-rabbit-admin
+    ports:
+      - "8083:8083"
+    environment:
+      <<: *rabbit-env
+      APP_ADMIN_MANAGEMENT_URL: http://rabbitmq:15672/api
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  rabbitmq_data:
+  postgres_data:

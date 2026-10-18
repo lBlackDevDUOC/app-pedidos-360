@@ -2,8 +2,8 @@ package cl.duoc.pedidos360.controller;
 
 import cl.duoc.pedidos360.model.Cliente;
 import cl.duoc.pedidos360.model.Pedido;
-import cl.duoc.pedidos360.repository.PedidoRepository;
 import cl.duoc.pedidos360.service.ClienteService;
+import cl.duoc.pedidos360.service.PedidoService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -30,33 +30,30 @@ public class PedidoController {
     /** Cuerpo del POST: el cliente no se envía, se toma del token. */
     public record PedidoRequest(Double total, String estado) {}
 
-    private final PedidoRepository pedidoRepository;
+    private final PedidoService pedidoService;
     private final ClienteService clienteService;
 
-    public PedidoController(PedidoRepository pedidoRepository, ClienteService clienteService) {
-        this.pedidoRepository = pedidoRepository;
+    public PedidoController(PedidoService pedidoService, ClienteService clienteService) {
+        this.pedidoService = pedidoService;
         this.clienteService = clienteService;
     }
 
     /** Lista los pedidos del usuario logueado. */
     @GetMapping
     public List<Pedido> listar(@AuthenticationPrincipal Jwt jwt) {
-        Cliente cliente = clienteService.obtenerOCrear(jwt);
-        return pedidoRepository.findByClienteOidOrderByFechaCreacionDesc(cliente.getOid());
+        return pedidoService.listar(clienteService.obtenerOCrear(jwt));
     }
 
     /** Obtiene un pedido propio por id; si no existe o es de otro usuario responde 404. */
     @GetMapping("/{id}")
     public Pedido obtener(@PathVariable Long id, @AuthenticationPrincipal Jwt jwt) {
-        Cliente cliente = clienteService.obtenerOCrear(jwt);
-        return pedidoRepository.findById(id)
-                .filter(p -> p.getCliente().getId().equals(cliente.getId()))
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Pedido no encontrado"));
+        return pedidoService.obtener(id, clienteService.obtenerOCrear(jwt));
     }
 
     /**
      * Crea un pedido para el usuario logueado. Exige el scope "OT.Create" en el token
      * (Spring lo mapea a la authority SCOPE_OT.Create desde la claim "scp" de Entra ID).
+     * El comprobante se genera de forma asíncrona: el pedido se devuelve sin él y aparece al recargar.
      */
     @PostMapping
     @PreAuthorize("hasAuthority('SCOPE_OT.Create')")
@@ -67,7 +64,6 @@ public class PedidoController {
 
         Cliente cliente = clienteService.obtenerOCrear(jwt);
         String estado = (req.estado() == null || req.estado().isBlank()) ? "PENDIENTE" : req.estado();
-        Pedido guardado = pedidoRepository.save(new Pedido(cliente, req.total(), estado));
-        return ResponseEntity.status(HttpStatus.CREATED).body(guardado);
+        return ResponseEntity.status(HttpStatus.CREATED).body(pedidoService.crear(cliente, req.total(), estado));
     }
 }

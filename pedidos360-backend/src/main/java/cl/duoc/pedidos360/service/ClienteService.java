@@ -2,6 +2,7 @@ package cl.duoc.pedidos360.service;
 
 import cl.duoc.pedidos360.model.Cliente;
 import cl.duoc.pedidos360.repository.ClienteRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 
@@ -31,6 +32,19 @@ public class ClienteService {
         final String nombreFinal = nombre;
 
         return clienteRepository.findByOid(id)
-                .orElseGet(() -> clienteRepository.save(new Cliente(id, nombreFinal, email)));
+                .orElseGet(() -> crear(id, nombreFinal, email));
+    }
+
+    /**
+     * En el primer login el frontend pide el perfil y los pedidos en paralelo: ambas peticiones pueden
+     * intentar crear el mismo cliente. La que pierde choca con la restricción única de "oid" y simplemente
+     * lee el cliente que creó la otra.
+     */
+    private Cliente crear(String oid, String nombre, String email) {
+        try {
+            return clienteRepository.saveAndFlush(new Cliente(oid, nombre, email));
+        } catch (DataIntegrityViolationException e) {
+            return clienteRepository.findByOid(oid).orElseThrow(() -> e);
+        }
     }
 }

@@ -1,8 +1,14 @@
 name: Deploy Pedidos360
 
+# Arquitectura (EP3):
+#   EC2-1 (EC2_HOST)     → frontend (Nginx) + ms-pedidos + PostgreSQL
+#   EC2-2 (MQ_EC2_HOST)  → RabbitMQ + ms-documentos + ms-notificaciones + ms-rabbit-admin
+#   Ambas en la misma VPC: ms-pedidos llega a RabbitMQ por la IP privada (MQ_PRIVATE_IP).
+
 on:
   push:
     branches: [ "BlackDev" ]
+  workflow_dispatch: # permite lanzarlo a mano desde la pestaña Actions
 
 jobs:
   deploy:
@@ -23,6 +29,71 @@ jobs:
           npm ci
           npm run build -- --configuration production
 
+      - name: Configurar Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # Pruebas de los 4 microservicios: si alguna falla, no se despliega nada
+      - name: Pruebas y empaquetado de microservicios
+        run: |
+          for ms in pedidos360-backend pedidos360-documentos pedidos360-notificaciones pedidos360-rabbit-admin; do
+            echo "::group::$ms"
+            mvn -B -ntp -f $ms/pom.xml verify
+            echo "::endgroup::"
+          done
+
+      - name: Armar paquete del servidor de mensajería
+        run: |
+          mkdir -p mensajeria/documentos mensajeria/notificaciones mensajeria/rabbit-admin
+          cp pedidos360-documentos/target/*-SNAPSHOT.jar      mensajeria/documentos/app.jar
+          cp pedidos360-notificaciones/target/*-SNAPSHOT.jar  mensajeria/notificaciones/app.jar
+          cp pedidos360-rabbit-admin/target/*-SNAPSHOT.jar    mensajeria/rabbit-admin/app.jar
+          cp deploy/servidor-mensajeria/* rabbitmq/aplicar-policies.sh mensajeria/
+          ls -R mensajeria
+
+      # ------------------------------------------------------------------ EC2-2: servidor de mensajería
+      # Se despliega primero para que RabbitMQ esté arriba cuando arranque ms-pedidos.
+      - name: Copiar servidor de mensajería a la EC2-2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.MQ_EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "mensajeria"
+          target: "/home/ec2-user"
+
+      - name: Desplegar RabbitMQ y microservicios en la EC2-2
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          RABBITMQ_USER: ${{ secrets.RABBITMQ_USER }}
+          RABBITMQ_PASSWORD: ${{ secrets.RABBITMQ_PASSWORD }}
+        with:
+          host: ${{ secrets.MQ_EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: RABBITMQ_USER,RABBITMQ_PASSWORD
+          command_timeout: 20m
+          script: |
+            set -e
+            cd /home/ec2-user/mensajeria
+            sh preparar-ec2.sh
+
+            # Credenciales para docker compose (solo legibles por ec2-user)
+            printf 'RABBITMQ_USER=%s\nRABBITMQ_PASSWORD=%s\n' "$RABBITMQ_USER" "$RABBITMQ_PASSWORD" > .env
+            chmod 600 .env
+
+            sudo docker build -q -f Dockerfile.jar --build-arg JAR=documentos/app.jar     -t pedidos360-ms-documentos .
+            sudo docker build -q -f Dockerfile.jar --build-arg JAR=notificaciones/app.jar -t pedidos360-ms-notificaciones .
+            sudo docker build -q -f Dockerfile.jar --build-arg JAR=rabbit-admin/app.jar   -t pedidos360-ms-rabbit-admin .
+
+            sudo docker compose up -d --remove-orphans --force-recreate
+            sudo docker image prune -f
+            sudo docker compose ps
+
+      # ------------------------------------------------------------------ EC2-1: frontend + ms-pedidos + PostgreSQL
       # 1. Actualizar código del Backend en EC2 primero
       - name: Sincronizar repositorio en EC2
         uses: appleboy/ssh-action@v1.0.3
@@ -57,15 +128,19 @@ jobs:
         env:
           DB_USERNAME: ${{ secrets.DB_USERNAME }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          MQ_PRIVATE_IP: ${{ secrets.MQ_PRIVATE_IP }}
+          RABBITMQ_USER: ${{ secrets.RABBITMQ_USER }}
+          RABBITMQ_PASSWORD: ${{ secrets.RABBITMQ_PASSWORD }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: DB_USERNAME,DB_PASSWORD
+          envs: DB_USERNAME,DB_PASSWORD,MQ_PRIVATE_IP,RABBITMQ_USER,RABBITMQ_PASSWORD
+          command_timeout: 20m
           script: |
             # Crear red personalizada de Docker si no existe
             docker network create pedidos360-net || true
-            
+
             # Verificar o iniciar PostgreSQL
             if [ ! "$(docker ps -q -f name=pedidos360-db)" ]; then
               docker run -d \
@@ -81,8 +156,8 @@ jobs:
             else
               docker network connect pedidos360-net pedidos360-db || true
             fi
-            
-            # Reconstruir y desplegar la imagen de Spring Boot
+
+            # Reconstruir y desplegar la imagen de Spring Boot (ms-pedidos)
             cd /home/ec2-user/app/pedidos360-backend
             docker build -t pedidos360-backend .
             docker stop pedidos360-backend || true
@@ -94,6 +169,9 @@ jobs:
               -e SPRING_DATASOURCE_URL=jdbc:postgresql://pedidos360-db:5432/pedidos360_db \
               -e DB_USERNAME="$DB_USERNAME" \
               -e DB_PASSWORD="$DB_PASSWORD" \
+              -e SPRING_RABBITMQ_HOST="$MQ_PRIVATE_IP" \
+              -e SPRING_RABBITMQ_USERNAME="$RABBITMQ_USER" \
+              -e SPRING_RABBITMQ_PASSWORD="$RABBITMQ_PASSWORD" \
               --restart unless-stopped \
               pedidos360-backend
 

@@ -15,6 +15,9 @@ export interface Pedido {
   total: number;
   estado: string;
   fechaCreacion: string;
+  /** Lo completa ms-documentos de forma asíncrona (evento documento.generado vía RabbitMQ). */
+  numeroComprobante?: string;
+  fechaComprobante?: string;
 }
 
 /** Cuerpo del POST /api/pedidos: el cliente lo toma el backend del token de Microsoft. */
