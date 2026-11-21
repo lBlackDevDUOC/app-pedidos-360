@@ -1,0 +1,70 @@
+# ms-bff: único microservicio expuesto al API Gateway. Valida el JWT y enruta a cada microservicio por la red
+# privada (IP privada de cada EC2 o nombre del contenedor). Ningún otro microservicio queda abierto a internet.
+#
+#   Angular ─▶ API Gateway (JWT #1) ─▶ ms-bff (JWT #2 + rol) ─▶ ms-pedidos / ms-catalog / ms-report / ... (JWT #3)
+server:
+  port: ${SERVER_PORT:8088}
+
+spring:
+  application:
+    name: ms-bff
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://login.microsoftonline.com/bb5324af-c266-41ed-b36c-a971641c7af2/v2.0
+          audiences: d4b53b0b-a9b3-42b4-b63d-71d24f58813b
+
+  cloud:
+    gateway:
+      server:
+        webflux:
+          # Tiempos máximos hacia los microservicios: uno lento no deja colgado al frontend
+          httpclient:
+            connect-timeout: 3000
+            response-timeout: 15s
+          default-filters:
+            # Sin Origin hacia adentro: CORS lo resuelve solo el BFF (si no, cada microservicio agregaría
+            # su propio Access-Control-Allow-Origin y el navegador rechazaría la respuesta duplicada)
+            - RemoveRequestHeader=Origin
+            - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials, RETAIN_FIRST
+          routes:
+            - id: pedidos
+              uri: ${PEDIDOS_URL:http://localhost:8080}
+              predicates:
+                - Path=/api/pedidos/**,/api/pedidos,/api/clientes/**,/api/health
+            - id: catalogo
+              uri: ${CATALOG_URL:http://localhost:8087}
+              predicates:
+                - Path=/api/catalog/**
+            - id: reportes
+              uri: ${REPORT_URL:http://localhost:8084}
+              predicates:
+                - Path=/api/report/**
+            - id: auditoria
+              uri: ${AUDIT_URL:http://localhost:8085}
+              predicates:
+                - Path=/api/audit/**,/api/audit
+            - id: kafka-admin
+              uri: ${KAFKA_ADMIN_URL:http://localhost:8086}
+              predicates:
+                - Path=/api/kafka-admin/**
+            - id: rabbit-admin
+              uri: ${RABBIT_ADMIN_URL:http://localhost:8083}
+              predicates:
+                - Path=/api/admin/**
+
+app:
+  # Orígenes del frontend permitidos (CORS lo resuelve el BFF, ver SecurityConfig)
+  cors:
+    allowed-origins: ${BFF_CORS_ORIGINS:http://localhost:4200,http://52.86.170.189}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,gateway
+  endpoint:
+    gateway:
+      access: read-only

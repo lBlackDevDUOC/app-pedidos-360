@@ -1,9 +1,10 @@
 name: Deploy Pedidos360
 
 # Arquitectura:
-#   EC2-1 (EC2_HOST)     → frontend (Nginx) + ms-pedidos + PostgreSQL
-#   EC2-2 (MQ_EC2_HOST)  → clúster RabbitMQ de 2 nodos + ms-documentos + ms-notificaciones + ms-rabbit-admin
-#   Todas en la misma VPC: ms-pedidos llega a los nodos RabbitMQ por la IP privada (MQ_PRIVATE_IP, puertos 5672 y 5673).
+#   EC2-1 (EC2_HOST)        → frontend (Nginx) + ms-bff (único puerto de API) + ms-pedidos + ms-catalog + PostgreSQL
+#   EC2-2 (MQ_EC2_HOST)     → clúster RabbitMQ de 2 nodos + ms-documentos + ms-notificaciones + ms-rabbit-admin
+#   EC2-3 (KAFKA_EC2_HOST)  → Kafka (3 Zookeeper + 3 brokers) + Kafka-UI + ms-report + ms-audit + ms-kafka-admin
+#   Todas en la misma VPC: se hablan por IP privada (MQ_PRIVATE_IP, KAFKA_PRIVATE_IP).
 #
 # Dos jobs:
 #   ci     → en cada push a BlackDev: compila el frontend y prueba/empaqueta todos los microservicios.
@@ -43,7 +44,8 @@ jobs:
       # Pruebas de todos los microservicios: si alguna falla, no se despliega nada
       - name: Pruebas y empaquetado de microservicios
         run: |
-          for ms in pedidos360-backend pedidos360-documentos pedidos360-notificaciones pedidos360-rabbit-admin \
+          for ms in pedidos360-backend pedidos360-catalog pedidos360-bff \
+                    pedidos360-documentos pedidos360-notificaciones pedidos360-rabbit-admin \
                     pedidos360-report pedidos360-audit pedidos360-kafka-admin; do
             echo "::group::$ms"
             mvn -B -ntp -f $ms/pom.xml verify
@@ -58,6 +60,16 @@ jobs:
           cp pedidos360-rabbit-admin/target/*-SNAPSHOT.jar    mensajeria/rabbit-admin/app.jar
           cp deploy/servidor-mensajeria/* rabbitmq/aplicar-policies.sh mensajeria/
           ls -R mensajeria
+
+      - name: Armar paquete del servidor de aplicaciones
+        run: |
+          mkdir -p apps/pedidos apps/catalog apps/bff apps/frontend
+          cp pedidos360-backend/target/*-SNAPSHOT.jar apps/pedidos/app.jar
+          cp pedidos360-catalog/target/*-SNAPSHOT.jar apps/catalog/app.jar
+          cp pedidos360-bff/target/*-SNAPSHOT.jar     apps/bff/app.jar
+          cp -r pedidos360-frontend/dist pedidos360-frontend/Dockerfile pedidos360-frontend/nginx.conf apps/frontend/
+          cp deploy/servidor-apps/* apps/
+          ls -R apps | head -40
 
       - name: Armar paquete del servidor de streaming
         run: |
@@ -76,9 +88,9 @@ jobs:
           name: paquetes
           retention-days: 1
           path: |
+            apps
             mensajeria
             streaming
-            pedidos360-frontend/dist
 
   deploy:
     needs: ci
@@ -182,99 +194,34 @@ jobs:
             sudo docker image prune -f
             sudo docker compose ps
 
-      # ------------------------------------------------------------------ EC2-1: frontend + ms-pedidos + PostgreSQL
-      # 1. Actualizar código del Backend en EC2 primero
-      - name: Sincronizar repositorio en EC2
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USERNAME }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            mkdir -p /home/ec2-user/app
-            if [ -d "/home/ec2-user/app/.git" ]; then
-              cd /home/ec2-user/app
-              git fetch origin BlackDev
-              git reset --hard origin/BlackDev
-            else
-              rm -rf /home/ec2-user/app
-              git clone -b BlackDev https://github.com/${{ github.repository }}.git /home/ec2-user/app
-            fi
-
-      # 2. Copiar archivos compilados del Frontend a la EC2
-      - name: Copiar dist del Frontend a la EC2
+      # ------------------------------------------------------------------ EC2-1: aplicaciones
+      # La EC2-1 ya no compila nada: recibe los .jar y el build de Angular probados en el job ci.
+      - name: Copiar servidor de aplicaciones a la EC2-1
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          source: "pedidos360-frontend/dist,pedidos360-frontend/Dockerfile,pedidos360-frontend/nginx.conf"
-          target: "/home/ec2-user/app"
+          source: "apps"
+          target: "/home/ec2-user"
 
-      # 3. Desplegar contenedores Docker en EC2
-      - name: Ejecutar despliegue Docker en EC2
+      - name: Desplegar frontend, BFF, ms-pedidos y ms-catalog en la EC2-1
         uses: appleboy/ssh-action@v1.0.3
         env:
           DB_USERNAME: ${{ secrets.DB_USERNAME }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           MQ_PRIVATE_IP: ${{ secrets.MQ_PRIVATE_IP }}
+          KAFKA_PRIVATE_IP: ${{ secrets.KAFKA_PRIVATE_IP }}
           RABBITMQ_USER: ${{ secrets.RABBITMQ_USER }}
           RABBITMQ_PASSWORD: ${{ secrets.RABBITMQ_PASSWORD }}
-          KAFKA_PRIVATE_IP: ${{ secrets.KAFKA_PRIVATE_IP }}
+          FRONTEND_ORIGIN: ${{ secrets.FRONTEND_ORIGIN }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: DB_USERNAME,DB_PASSWORD,MQ_PRIVATE_IP,RABBITMQ_USER,RABBITMQ_PASSWORD,KAFKA_PRIVATE_IP
+          envs: DB_USERNAME,DB_PASSWORD,MQ_PRIVATE_IP,KAFKA_PRIVATE_IP,RABBITMQ_USER,RABBITMQ_PASSWORD,FRONTEND_ORIGIN
           command_timeout: 20m
           script: |
-            # Crear red personalizada de Docker si no existe
-            docker network create pedidos360-net || true
-
-            # Verificar o iniciar PostgreSQL
-            if [ ! "$(docker ps -q -f name=pedidos360-db)" ]; then
-              docker run -d \
-                --name pedidos360-db \
-                --network pedidos360-net \
-                -e POSTGRES_DB=pedidos360_db \
-                -e POSTGRES_USER="$DB_USERNAME" \
-                -e POSTGRES_PASSWORD="$DB_PASSWORD" \
-                -p 5432:5432 \
-                -v postgres-data:/var/lib/postgresql/data \
-                --restart unless-stopped \
-                postgres:16-alpine || true
-            else
-              docker network connect pedidos360-net pedidos360-db || true
-            fi
-
-            # Reconstruir y desplegar la imagen de Spring Boot (ms-pedidos)
-            cd /home/ec2-user/app/pedidos360-backend
-            docker build -t pedidos360-backend .
-            docker stop pedidos360-backend || true
-            docker rm pedidos360-backend || true
-            docker run -d \
-              --name pedidos360-backend \
-              --network pedidos360-net \
-              -p 8080:8080 \
-              -e SPRING_DATASOURCE_URL=jdbc:postgresql://pedidos360-db:5432/pedidos360_db \
-              -e DB_USERNAME="$DB_USERNAME" \
-              -e DB_PASSWORD="$DB_PASSWORD" \
-              -e SPRING_RABBITMQ_ADDRESSES="$MQ_PRIVATE_IP:5672,$MQ_PRIVATE_IP:5673" \
-              -e SPRING_RABBITMQ_ADDRESSSHUFFLEMODE=random \
-              -e SPRING_RABBITMQ_USERNAME="$RABBITMQ_USER" \
-              -e SPRING_RABBITMQ_PASSWORD="$RABBITMQ_PASSWORD" \
-              -e KAFKA_BOOTSTRAP_SERVERS="$KAFKA_PRIVATE_IP:9092,$KAFKA_PRIVATE_IP:9093,$KAFKA_PRIVATE_IP:9094" \
-              --restart unless-stopped \
-              pedidos360-backend
-
-            # Reconstruir y desplegar Frontend (Angular + Nginx)
-            cd /home/ec2-user/app/pedidos360-frontend
-            docker build -t pedidos360-frontend .
-            docker stop pedidos360-frontend || true
-            docker rm pedidos360-frontend || true
-            docker run -d \
-              --name pedidos360-frontend \
-              --network pedidos360-net \
-              -p 80:80 \
-              --restart unless-stopped \
-              pedidos360-frontend
+            set -e
+            cd /home/ec2-user/apps
+            sh desplegar.sh
