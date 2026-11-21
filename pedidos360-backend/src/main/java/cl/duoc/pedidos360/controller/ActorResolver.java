@@ -1,5 +1,6 @@
 package cl.duoc.pedidos360.controller;
 
+import cl.duoc.pedidos360.config.RolesJwtConverter;
 import cl.duoc.pedidos360.model.Actor;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -15,7 +16,7 @@ public class ActorResolver {
         String id = jwt.getClaimAsString("oid") != null ? jwt.getClaimAsString("oid") : jwt.getSubject();
         String nombre = jwt.getClaimAsString("name") != null ? jwt.getClaimAsString("name")
                 : jwt.getClaimAsString("preferred_username");
-        List<String> roles = jwt.getClaimAsStringList("roles");
+        List<String> roles = RolesJwtConverter.rolesDe(jwt);
         return new Actor(id, nombre, roles, ipDeOrigen(request), request.getHeader("User-Agent"));
     }
 

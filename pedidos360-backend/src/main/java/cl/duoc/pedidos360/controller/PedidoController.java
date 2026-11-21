@@ -52,29 +52,33 @@ public class PedidoController {
         this.actorResolver = actorResolver;
     }
 
-    /** Lista los pedidos del usuario logueado. Filtros opcionales: ?estado=ACEPTADO&desde=...&hasta=... (ISO-8601). */
+    /**
+     * Lista pedidos. Cliente: los suyos. Operador/Admin: los de todos (resuelto en el servicio según el rol).
+     * Filtros opcionales: ?estado=ACEPTADO&desde=...&hasta=... (ISO-8601).
+     */
     @GetMapping
     public List<Pedido> listar(
             @RequestParam(required = false) EstadoPedido estado,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime desde,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime hasta,
-            @AuthenticationPrincipal Jwt jwt) {
-        return pedidoService.listar(clienteService.obtenerOCrear(jwt), estado, desde, hasta);
+            @AuthenticationPrincipal Jwt jwt, HttpServletRequest request) {
+        return pedidoService.listar(clienteService.obtenerOCrear(jwt), actorResolver.desde(jwt, request),
+                estado, desde, hasta);
     }
 
-    /** Obtiene un pedido propio por id; si no existe o es de otro usuario responde 404. */
+    /** Obtiene un pedido por id; un Cliente que pide uno ajeno recibe 404. */
     @GetMapping("/{id}")
-    public Pedido obtener(@PathVariable Long id, @AuthenticationPrincipal Jwt jwt) {
-        return pedidoService.obtener(id, clienteService.obtenerOCrear(jwt));
+    public Pedido obtener(@PathVariable Long id, @AuthenticationPrincipal Jwt jwt, HttpServletRequest request) {
+        return pedidoService.obtener(id, clienteService.obtenerOCrear(jwt), actorResolver.desde(jwt, request));
     }
 
     /**
-     * Crea un pedido para el usuario logueado. Exige el scope "OT.Create" en el token
-     * (Spring lo mapea a la authority SCOPE_OT.Create desde la claim "scp" de Entra ID).
+     * Crea un pedido para el usuario logueado. Exige el scope "OT.Create" (claim scp) y ser Cliente u Operador
+     * (App Roles de Entra ID, claim roles). Un Admin administra, no compra: recibe 403.
      * El comprobante se genera de forma asíncrona: el pedido se devuelve sin él y aparece al recargar.
      */
     @PostMapping
-    @PreAuthorize("hasAuthority('SCOPE_OT.Create')")
+    @PreAuthorize("hasAuthority('SCOPE_OT.Create') and hasAnyRole('CLIENTE', 'OPERADOR')")
     public ResponseEntity<Pedido> crear(@Valid @RequestBody PedidoRequest req, @AuthenticationPrincipal Jwt jwt,
                                         HttpServletRequest request) {
         Cliente cliente = clienteService.obtenerOCrear(jwt);
@@ -82,7 +86,10 @@ public class PedidoController {
         return ResponseEntity.status(HttpStatus.CREATED).body(creado);
     }
 
-    /** Avanza el pedido en su ciclo de vida. Transición no permitida → 409 Conflict. */
+    /**
+     * Avanza el pedido en su ciclo de vida. Transición no permitida → 409. Un Cliente solo puede cancelar los
+     * suyos (el servicio responde 403 si intenta otro estado).
+     */
     @PutMapping("/{id}/estado")
     @PreAuthorize("hasAuthority('SCOPE_OT.Create')")
     public Pedido cambiarEstado(@PathVariable Long id, @Valid @RequestBody CambioEstadoRequest req,

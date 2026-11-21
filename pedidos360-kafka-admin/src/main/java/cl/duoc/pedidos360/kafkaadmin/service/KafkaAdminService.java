@@ -160,7 +160,7 @@ public class KafkaAdminService {
         esperar(admin.createTopics(List.of(nuevo)).all(), "crear el tópico " + request.nombre());
         log.info("[ADMIN] Tópico creado {} particiones={} RF={} configs={}", request.nombre(),
                 request.particiones(), request.factorReplicacion(), request.configsOVacio());
-        return obtenerTopico(request.nombre());
+        return cuandoEsteDisponible(request.nombre(), request.particiones());
     }
 
     public void eliminarTopico(String nombre) {
@@ -185,7 +185,7 @@ public class KafkaAdminService {
         esperar(admin.createPartitions(Map.of(nombre, NewPartitions.increaseTo(total))).all(),
                 "aumentar particiones de " + nombre);
         log.info("[ADMIN] Tópico {} pasa de {} a {} particiones", nombre, actuales, total);
-        return obtenerTopico(nombre);
+        return cuandoEsteDisponible(nombre, total);
     }
 
     // ================================================================ Configuraciones de tópico
@@ -307,6 +307,32 @@ public class KafkaAdminService {
     }
 
     // ================================================================ Apoyo
+
+    /**
+     * El controlador confirma la creación antes de que TODOS los brokers conozcan el tópico (la metadata se
+     * propaga en milisegundos). Se reintenta la lectura un momento en vez de responder un 404 falso.
+     */
+    private TopicoDetalle cuandoEsteDisponible(String nombre, int particionesEsperadas) {
+        RuntimeException ultimo = null;
+        for (int intento = 0; intento < 25; intento++) {
+            try {
+                TopicoDetalle detalle = obtenerTopico(nombre);
+                if (detalle.particiones() >= particionesEsperadas) {
+                    return detalle;
+                }
+            } catch (RecursoNoEncontrado e) {
+                ultimo = e;
+            }
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        if (ultimo != null) throw ultimo;
+        return obtenerTopico(nombre);
+    }
 
     private void exigirGrupoVacio(String groupId, String accion) {
         GrupoDetalle grupo = obtenerGrupo(groupId);

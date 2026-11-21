@@ -1,6 +1,7 @@
 package cl.duoc.pedidos360.controller;
 
 import cl.duoc.pedidos360.model.TransicionInvalidaException;
+import cl.duoc.pedidos360.service.OperacionNoPermitidaException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -22,6 +23,13 @@ public class ErroresApiHandler {
         problema.setProperty("estadoActual", e.getActual());
         problema.setProperty("estadoSolicitado", e.getDestino());
         problema.setProperty("permitidos", e.getActual().siguientes());
+        return problema;
+    }
+
+    @ExceptionHandler(OperacionNoPermitidaException.class)
+    public ProblemDetail operacionNoPermitida(OperacionNoPermitidaException e) {
+        ProblemDetail problema = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, e.getMessage());
+        problema.setTitle("Operación no permitida para tu rol");
         return problema;
     }
 

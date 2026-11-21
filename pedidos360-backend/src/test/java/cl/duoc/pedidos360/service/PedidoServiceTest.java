@@ -29,6 +29,7 @@ class PedidoServiceTest {
     private PedidoEventPublisher publisher;
     private EventoNegocioPublisher eventosNegocio;
     private final Actor actor = new Actor("oid-1", "Ana", List.of("Cliente"), "10.0.0.1", "JUnit");
+    private final Actor operador = new Actor("oid-op", "Olga", List.of("Operador"), "10.0.0.2", "JUnit");
     private PedidoService service;
 
     @BeforeEach
@@ -80,11 +81,11 @@ class PedidoServiceTest {
         Pedido pedido = new Pedido(cliente, 1000.0);
         when(repository.findById(7L)).thenReturn(Optional.of(pedido));
 
-        Pedido resultado = service.cambiarEstado(7L, EstadoPedido.ACEPTADO, cliente, actor);
+        Pedido resultado = service.cambiarEstado(7L, EstadoPedido.ACEPTADO, cliente, operador);
 
         assertThat(resultado.getEstado()).isEqualTo(EstadoPedido.ACEPTADO);
         verify(repository).save(pedido);
-        verify(eventosNegocio).estadoCambiado(pedido, EstadoPedido.CREADO, actor);
+        verify(eventosNegocio).estadoCambiado(pedido, EstadoPedido.CREADO, operador);
     }
 
     @Test
@@ -93,10 +94,34 @@ class PedidoServiceTest {
         cliente.setId(1L);
         when(repository.findById(7L)).thenReturn(Optional.of(new Pedido(cliente, 1000.0)));
 
-        assertThatThrownBy(() -> service.cambiarEstado(7L, EstadoPedido.DESPACHADO, cliente, actor))
+        assertThatThrownBy(() -> service.cambiarEstado(7L, EstadoPedido.DESPACHADO, cliente, operador))
                 .isInstanceOf(TransicionInvalidaException.class);
         verify(repository, never()).save(any());
         verify(eventosNegocio, never()).estadoCambiado(any(), any(), any());
+    }
+
+    @Test
+    void cliente_puedeCancelarSuPedidoPeroNoAvanzarlo() {
+        Cliente cliente = new Cliente("oid-1", "Ana", "ana@duoc.cl");
+        cliente.setId(1L);
+        when(repository.findById(7L)).thenReturn(Optional.of(new Pedido(cliente, 1000.0)));
+
+        assertThatThrownBy(() -> service.cambiarEstado(7L, EstadoPedido.ACEPTADO, cliente, actor))
+                .isInstanceOf(OperacionNoPermitidaException.class);
+        assertThat(service.cambiarEstado(7L, EstadoPedido.CANCELADO, cliente, actor).getEstado())
+                .isEqualTo(EstadoPedido.CANCELADO);
+    }
+
+    @Test
+    void cliente_noVePedidosAjenos_operadorSi() {
+        Cliente duena = new Cliente("oid-1", "Ana", "ana@duoc.cl");
+        duena.setId(1L);
+        Cliente otro = new Cliente("oid-2", "Beto", "b@duoc.cl");
+        otro.setId(2L);
+        when(repository.findById(7L)).thenReturn(Optional.of(new Pedido(duena, 1000.0)));
+
+        assertThatThrownBy(() -> service.obtener(7L, otro, actor)).isInstanceOf(PedidoNoEncontradoException.class);
+        assertThat(service.obtener(7L, otro, operador)).isNotNull();
     }
 
     @Test

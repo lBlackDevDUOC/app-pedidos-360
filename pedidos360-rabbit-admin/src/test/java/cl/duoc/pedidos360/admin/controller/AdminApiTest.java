@@ -17,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -73,7 +74,7 @@ class AdminApiTest {
         void listar_200() throws Exception {
             when(service.listarColas()).thenReturn(List.of(COLA));
 
-            mvc.perform(get("/api/admin/queues").with(jwt()))
+            mvc.perform(get("/api/admin/queues").with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$[0].nombre").value("demo.q"));
         }
@@ -165,7 +166,7 @@ class AdminApiTest {
 
         @Test
         void eliminar_204() throws Exception {
-            mvc.perform(delete("/api/admin/queues/demo.q").with(jwt())).andExpect(status().isNoContent());
+            mvc.perform(delete("/api/admin/queues/demo.q").with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN")))).andExpect(status().isNoContent());
             verify(service).eliminarCola("demo.q");
         }
 
@@ -173,7 +174,7 @@ class AdminApiTest {
         void eliminar_inexistente_404() throws Exception {
             doThrow(new RecursoNoEncontradoException("La cola 'nada.q' no existe")).when(service).eliminarCola("nada.q");
 
-            mvc.perform(delete("/api/admin/queues/nada.q").with(jwt()))
+            mvc.perform(delete("/api/admin/queues/nada.q").with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))))
                     .andExpect(status().isNotFound())
                     .andExpect(jsonPath("$.detail").value("La cola 'nada.q' no existe"));
         }
@@ -182,13 +183,13 @@ class AdminApiTest {
         void eliminar_colaDelSistema_409() throws Exception {
             doThrow(new RecursoProtegidoException("protegida")).when(service).eliminarCola("pedidos.documento-generado.q");
 
-            mvc.perform(delete("/api/admin/queues/pedidos.documento-generado.q").with(jwt()))
+            mvc.perform(delete("/api/admin/queues/pedidos.documento-generado.q").with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))))
                     .andExpect(status().isConflict());
         }
 
         @Test
         void eliminar_nombreInvalidoEnRuta_400() throws Exception {
-            mvc.perform(delete("/api/admin/queues/amq.gen-123").with(jwt()))
+            mvc.perform(delete("/api/admin/queues/amq.gen-123").with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.errores.nombre").exists());
             verifyNoInteractions(service);
@@ -198,7 +199,7 @@ class AdminApiTest {
         void purgar_200() throws Exception {
             when(service.purgarCola("demo.dlq")).thenReturn(new PurgaResponse("demo.dlq", 4));
 
-            mvc.perform(delete("/api/admin/queues/demo.dlq/messages").with(jwt()))
+            mvc.perform(delete("/api/admin/queues/demo.dlq/messages").with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.mensajesEliminados").value(4));
         }
@@ -233,7 +234,7 @@ class AdminApiTest {
 
         @Test
         void eliminar_204() throws Exception {
-            mvc.perform(delete("/api/admin/exchanges/demo.ex").with(jwt())).andExpect(status().isNoContent());
+            mvc.perform(delete("/api/admin/exchanges/demo.ex").with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN")))).andExpect(status().isNoContent());
             verify(service).eliminarExchange("demo.ex");
         }
     }
@@ -261,7 +262,7 @@ class AdminApiTest {
 
         @Test
         void eliminar_sinParametroObligatorio_400() throws Exception {
-            mvc.perform(delete("/api/admin/bindings").param("exchange", "demo.ex").with(jwt()))
+            mvc.perform(delete("/api/admin/bindings").param("exchange", "demo.ex").with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.errores.cola").value("es obligatorio"));
         }
@@ -270,13 +271,13 @@ class AdminApiTest {
         void eliminar_204() throws Exception {
             mvc.perform(delete("/api/admin/bindings")
                             .param("exchange", "demo.ex").param("cola", "demo.q").param("routingKey", "reporte.*")
-                            .with(jwt()))
+                            .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))))
                     .andExpect(status().isNoContent());
             verify(service).eliminarBinding("demo.ex", "demo.q", "reporte.*");
         }
     }
 
     private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String body) {
-        return request.with(jwt()).contentType(MediaType.APPLICATION_JSON).content(body);
+        return request.with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))).contentType(MediaType.APPLICATION_JSON).content(body);
     }
 }

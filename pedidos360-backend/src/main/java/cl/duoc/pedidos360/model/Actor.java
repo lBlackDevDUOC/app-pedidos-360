@@ -16,6 +16,15 @@ public record Actor(String id, String nombre, List<String> roles, String ip, Str
         roles = roles == null ? List.of() : List.copyOf(roles);
     }
 
+    public boolean tieneRol(String rol) {
+        return roles.stream().anyMatch(r -> r.equalsIgnoreCase(rol));
+    }
+
+    /** Operador y Admin gestionan los pedidos de todos los clientes; un Cliente solo los suyos. */
+    public boolean gestionaPedidos() {
+        return tieneRol("Operador") || tieneRol("Admin");
+    }
+
     /** Para procesos internos (ej. un consumidor de mensajes) donde no hay un usuario detrás. */
     public static Actor sistema(String componente) {
         return new Actor(componente, componente, List.of("SISTEMA"), null, null);

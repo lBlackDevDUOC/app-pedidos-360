@@ -45,17 +45,25 @@ public class PedidoService {
         this.eventoNegocioPublisher = eventoNegocioPublisher;
     }
 
-    /** Pedidos del cliente con filtros opcionales por estado y rango de fecha de creación. */
-    public List<Pedido> listar(Cliente cliente, EstadoPedido estado, LocalDateTime desde, LocalDateTime hasta) {
+    /**
+     * Pedidos con filtros opcionales por estado y rango de fecha de creación.
+     * Operador y Admin ven los de todos los clientes; un Cliente solo los suyos.
+     */
+    public List<Pedido> listar(Cliente cliente, Actor actor, EstadoPedido estado, LocalDateTime desde,
+                               LocalDateTime hasta) {
+        String soloDe = actor.gestionaPedidos() ? null : cliente.getOid();
         Specification<Pedido> filtro = Specification.allOf(
-                delCliente(cliente.getOid()), conEstado(estado), creadoDesde(desde), creadoHasta(hasta));
+                delCliente(soloDe), conEstado(estado), creadoDesde(desde), creadoHasta(hasta));
         return pedidoRepository.findAll(filtro, Sort.by(Sort.Direction.DESC, "fechaCreacion"));
     }
 
-    /** Pedido propio por id; si no existe o es de otro cliente lanza {@link PedidoNoEncontradoException}. */
-    public Pedido obtener(Long id, Cliente cliente) {
+    /**
+     * Pedido por id. Un Cliente solo ve los suyos: si es de otro responde 404 (no 403), así no se revela
+     * que ese id existe.
+     */
+    public Pedido obtener(Long id, Cliente cliente, Actor actor) {
         return pedidoRepository.findById(id)
-                .filter(p -> p.getCliente().getId().equals(cliente.getId()))
+                .filter(p -> actor.gestionaPedidos() || p.getCliente().getId().equals(cliente.getId()))
                 .orElseThrow(() -> new PedidoNoEncontradoException(id));
     }
 
@@ -74,10 +82,15 @@ public class PedidoService {
      * Avanza el pedido en su ciclo de vida. La validación de la transición la hace la entidad
      * ({@link Pedido#cambiarEstado}); si no es válida se lanza TransicionInvalidaException (409).
      * El evento a Kafka se publica recién después del commit (ver KafkaEventoNegocioPublisher).
+     * Permisos: Operador y Admin mueven cualquier pedido; un Cliente solo puede CANCELAR uno suyo.
      */
     @Transactional
     public Pedido cambiarEstado(Long id, EstadoPedido destino, Cliente cliente, Actor actor) {
-        Pedido pedido = obtener(id, cliente);
+        Pedido pedido = obtener(id, cliente, actor);
+        if (!actor.gestionaPedidos() && destino != EstadoPedido.CANCELADO) {
+            throw new OperacionNoPermitidaException(
+                    "Un cliente solo puede cancelar sus pedidos; el resto de los estados los gestiona un Operador");
+        }
         EstadoPedido anterior = pedido.cambiarEstado(destino);
         Pedido guardado = pedidoRepository.save(pedido);
         eventoNegocioPublisher.estadoCambiado(guardado, anterior, actor);

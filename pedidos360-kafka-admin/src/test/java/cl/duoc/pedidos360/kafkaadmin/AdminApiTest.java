@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -36,8 +37,14 @@ class AdminApiTest {
     }
 
     @Test
+    void conTokenPeroSinRolAdminResponde403() throws Exception {
+        mvc.perform(get("/api/kafka-admin/topics").with(jwt().authorities(new SimpleGrantedAuthority("ROLE_OPERADOR"))))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void crearConDatosInvalidosResponde400ConDetallePorCampo() throws Exception {
-        mvc.perform(post("/api/kafka-admin/topics").with(jwt())
+        mvc.perform(post("/api/kafka-admin/topics").with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN")))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"nombre\":\"__malo\",\"particiones\":0,\"factorReplicacion\":5}"))
                 .andExpect(status().isBadRequest())
@@ -50,7 +57,7 @@ class AdminApiTest {
     void eliminarTopicoDelSistemaResponde409() throws Exception {
         doThrow(new OperacionNoPermitida("es del sistema")).when(service).eliminarTopico("orders.events");
 
-        mvc.perform(delete("/api/kafka-admin/topics/orders.events").with(jwt()))
+        mvc.perform(delete("/api/kafka-admin/topics/orders.events").with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.title").value("Operación no permitida"));
     }
