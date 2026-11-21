@@ -1,5 +1,6 @@
 package cl.duoc.pedidos360.model;
 
+import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
@@ -24,8 +25,15 @@ public class Pedido {
     private Cliente cliente;
 
     private Double total;
-    private String estado;
+
+    /** Se guarda como texto con {@link EstadoPedidoConverter}. Solo cambia a través de {@link #cambiarEstado}. */
+    @Column(length = 20)
+    private EstadoPedido estado = EstadoPedido.CREADO;
+
     private LocalDateTime fechaCreacion = LocalDateTime.now();
+    private LocalDateTime fechaActualizacion;
+    /** Momento en que pasó a ENTREGADO: junto con fechaCreacion da el lead time del pedido. */
+    private LocalDateTime fechaEntrega;
 
     /** N° de comprobante emitido por ms-documentos (llega por RabbitMQ, evento documento.generado). */
     private String numeroComprobante;
@@ -33,10 +41,28 @@ public class Pedido {
 
     public Pedido() {}
 
-    public Pedido(Cliente cliente, Double total, String estado) {
+    public Pedido(Cliente cliente, Double total) {
         this.cliente = cliente;
         this.total = total;
-        this.estado = estado;
+    }
+
+    /**
+     * Aplica la regla del ciclo de vida: solo se permiten las transiciones que declara {@link EstadoPedido}.
+     *
+     * @return el estado anterior (lo necesita el evento de cambio de estado)
+     * @throws TransicionInvalidaException si el estado actual no permite pasar a {@code destino}
+     */
+    public EstadoPedido cambiarEstado(EstadoPedido destino) {
+        EstadoPedido anterior = this.estado;
+        if (!anterior.puedeCambiarA(destino)) {
+            throw new TransicionInvalidaException(anterior, destino);
+        }
+        this.estado = destino;
+        this.fechaActualizacion = LocalDateTime.now();
+        if (destino == EstadoPedido.ENTREGADO) {
+            this.fechaEntrega = this.fechaActualizacion;
+        }
+        return anterior;
     }
 
     // Getters y Setters
@@ -49,11 +75,14 @@ public class Pedido {
     public Double getTotal() { return total; }
     public void setTotal(Double total) { this.total = total; }
 
-    public String getEstado() { return estado; }
-    public void setEstado(String estado) { this.estado = estado; }
+    public EstadoPedido getEstado() { return estado; }
 
     public LocalDateTime getFechaCreacion() { return fechaCreacion; }
     public void setFechaCreacion(LocalDateTime fechaCreacion) { this.fechaCreacion = fechaCreacion; }
+
+    public LocalDateTime getFechaActualizacion() { return fechaActualizacion; }
+
+    public LocalDateTime getFechaEntrega() { return fechaEntrega; }
 
     public String getNumeroComprobante() { return numeroComprobante; }
     public void setNumeroComprobante(String numeroComprobante) { this.numeroComprobante = numeroComprobante; }

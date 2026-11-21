@@ -1,9 +1,14 @@
 package cl.duoc.pedidos360.controller;
 
 import cl.duoc.pedidos360.model.Cliente;
+import cl.duoc.pedidos360.model.EstadoPedido;
 import cl.duoc.pedidos360.model.Pedido;
 import cl.duoc.pedidos360.service.ClienteService;
 import cl.duoc.pedidos360.service.PedidoService;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -12,11 +17,13 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -27,8 +34,12 @@ import java.util.List;
 @RequestMapping("/api/pedidos")
 public class PedidoController {
 
-    /** Cuerpo del POST: el cliente no se envía, se toma del token. */
-    public record PedidoRequest(Double total, String estado) {}
+    /** Cuerpo del POST: el cliente no se envía (se toma del token) y el estado inicial siempre es CREADO. */
+    public record PedidoRequest(@NotNull(message = "El total es obligatorio")
+                                @Positive(message = "El total debe ser mayor a 0") Double total) {}
+
+    /** Cuerpo del PUT /{id}/estado. Un valor que no sea un EstadoPedido válido responde 400. */
+    public record CambioEstadoRequest(@NotNull(message = "El estado es obligatorio") EstadoPedido estado) {}
 
     private final PedidoService pedidoService;
     private final ClienteService clienteService;
@@ -38,10 +49,14 @@ public class PedidoController {
         this.clienteService = clienteService;
     }
 
-    /** Lista los pedidos del usuario logueado. */
+    /** Lista los pedidos del usuario logueado. Filtros opcionales: ?estado=ACEPTADO&desde=...&hasta=... (ISO-8601). */
     @GetMapping
-    public List<Pedido> listar(@AuthenticationPrincipal Jwt jwt) {
-        return pedidoService.listar(clienteService.obtenerOCrear(jwt));
+    public List<Pedido> listar(
+            @RequestParam(required = false) EstadoPedido estado,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime desde,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime hasta,
+            @AuthenticationPrincipal Jwt jwt) {
+        return pedidoService.listar(clienteService.obtenerOCrear(jwt), estado, desde, hasta);
     }
 
     /** Obtiene un pedido propio por id; si no existe o es de otro usuario responde 404. */
@@ -57,13 +72,16 @@ public class PedidoController {
      */
     @PostMapping
     @PreAuthorize("hasAuthority('SCOPE_OT.Create')")
-    public ResponseEntity<Pedido> crear(@RequestBody PedidoRequest req, @AuthenticationPrincipal Jwt jwt) {
-        if (req.total() == null || req.total() <= 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El total debe ser mayor a 0");
-        }
-
+    public ResponseEntity<Pedido> crear(@Valid @RequestBody PedidoRequest req, @AuthenticationPrincipal Jwt jwt) {
         Cliente cliente = clienteService.obtenerOCrear(jwt);
-        String estado = (req.estado() == null || req.estado().isBlank()) ? "PENDIENTE" : req.estado();
-        return ResponseEntity.status(HttpStatus.CREATED).body(pedidoService.crear(cliente, req.total(), estado));
+        return ResponseEntity.status(HttpStatus.CREATED).body(pedidoService.crear(cliente, req.total()));
+    }
+
+    /** Avanza el pedido en su ciclo de vida. Transición no permitida → 409 Conflict. */
+    @PutMapping("/{id}/estado")
+    @PreAuthorize("hasAuthority('SCOPE_OT.Create')")
+    public Pedido cambiarEstado(@PathVariable Long id, @Valid @RequestBody CambioEstadoRequest req,
+                                @AuthenticationPrincipal Jwt jwt) {
+        return pedidoService.cambiarEstado(id, req.estado(), clienteService.obtenerOCrear(jwt));
     }
 }

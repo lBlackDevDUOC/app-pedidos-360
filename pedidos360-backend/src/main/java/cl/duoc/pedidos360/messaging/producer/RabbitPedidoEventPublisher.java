@@ -35,7 +35,7 @@ public class RabbitPedidoEventPublisher implements PedidoEventPublisher {
                 pedido.getCliente().getNombre(),
                 pedido.getCliente().getEmail(),
                 pedido.getTotal(),
-                pedido.getEstado(),
+                pedido.getEstado().name(),
                 pedido.getFechaCreacion());
 
         String exchange = props.exchanges().eventos();

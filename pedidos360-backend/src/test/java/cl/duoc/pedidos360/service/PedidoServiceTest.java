@@ -2,7 +2,9 @@ package cl.duoc.pedidos360.service;
 
 import cl.duoc.pedidos360.messaging.producer.PedidoEventPublisher;
 import cl.duoc.pedidos360.model.Cliente;
+import cl.duoc.pedidos360.model.EstadoPedido;
 import cl.duoc.pedidos360.model.Pedido;
+import cl.duoc.pedidos360.model.TransicionInvalidaException;
 import cl.duoc.pedidos360.repository.PedidoRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,7 +36,7 @@ class PedidoServiceTest {
 
     @Test
     void crear_guardaYPublicaElEvento() {
-        Pedido pedido = service.crear(new Cliente("oid-1", "Ana", "ana@duoc.cl"), 15000.0, "PENDIENTE");
+        Pedido pedido = service.crear(new Cliente("oid-1", "Ana", "ana@duoc.cl"), 15000.0);
 
         verify(repository).save(pedido);
         verify(publisher).publicarPedidoCreado(pedido);
@@ -42,7 +44,7 @@ class PedidoServiceTest {
 
     @Test
     void registrarComprobante_guardaNumeroYFecha() {
-        Pedido pedido = new Pedido(new Cliente(), 1000.0, "PENDIENTE");
+        Pedido pedido = new Pedido(new Cliente(), 1000.0);
         when(repository.findById(7L)).thenReturn(Optional.of(pedido));
         LocalDateTime fecha = LocalDateTime.of(2026, 10, 18, 10, 0);
 
@@ -55,12 +57,36 @@ class PedidoServiceTest {
 
     @Test
     void registrarComprobante_esIdempotenteAnteMensajesDuplicados() {
-        Pedido pedido = new Pedido(new Cliente(), 1000.0, "PENDIENTE");
+        Pedido pedido = new Pedido(new Cliente(), 1000.0);
         pedido.setNumeroComprobante("BOL-00000007");
         when(repository.findById(7L)).thenReturn(Optional.of(pedido));
 
         service.registrarComprobante(7L, "BOL-00000007", LocalDateTime.now());
 
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void cambiarEstado_avanzaYGuarda() {
+        Cliente cliente = new Cliente("oid-1", "Ana", "ana@duoc.cl");
+        cliente.setId(1L);
+        Pedido pedido = new Pedido(cliente, 1000.0);
+        when(repository.findById(7L)).thenReturn(Optional.of(pedido));
+
+        Pedido resultado = service.cambiarEstado(7L, EstadoPedido.ACEPTADO, cliente);
+
+        assertThat(resultado.getEstado()).isEqualTo(EstadoPedido.ACEPTADO);
+        verify(repository).save(pedido);
+    }
+
+    @Test
+    void cambiarEstado_transicionInvalida_noGuarda() {
+        Cliente cliente = new Cliente("oid-1", "Ana", "ana@duoc.cl");
+        cliente.setId(1L);
+        when(repository.findById(7L)).thenReturn(Optional.of(new Pedido(cliente, 1000.0)));
+
+        assertThatThrownBy(() -> service.cambiarEstado(7L, EstadoPedido.DESPACHADO, cliente))
+                .isInstanceOf(TransicionInvalidaException.class);
         verify(repository, never()).save(any());
     }
 

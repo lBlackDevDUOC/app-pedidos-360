@@ -2,15 +2,23 @@ package cl.duoc.pedidos360.service;
 
 import cl.duoc.pedidos360.messaging.producer.PedidoEventPublisher;
 import cl.duoc.pedidos360.model.Cliente;
+import cl.duoc.pedidos360.model.EstadoPedido;
 import cl.duoc.pedidos360.model.Pedido;
 import cl.duoc.pedidos360.repository.PedidoRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+
+import static cl.duoc.pedidos360.repository.PedidoSpecs.conEstado;
+import static cl.duoc.pedidos360.repository.PedidoSpecs.creadoDesde;
+import static cl.duoc.pedidos360.repository.PedidoSpecs.creadoHasta;
+import static cl.duoc.pedidos360.repository.PedidoSpecs.delCliente;
 
 /**
  * Lógica de negocio de pedidos. No conoce RabbitMQ: anuncia los pedidos nuevos a través de
@@ -29,8 +37,11 @@ public class PedidoService {
         this.eventPublisher = eventPublisher;
     }
 
-    public List<Pedido> listar(Cliente cliente) {
-        return pedidoRepository.findByClienteOidOrderByFechaCreacionDesc(cliente.getOid());
+    /** Pedidos del cliente con filtros opcionales por estado y rango de fecha de creación. */
+    public List<Pedido> listar(Cliente cliente, EstadoPedido estado, LocalDateTime desde, LocalDateTime hasta) {
+        Specification<Pedido> filtro = Specification.allOf(
+                delCliente(cliente.getOid()), conEstado(estado), creadoDesde(desde), creadoHasta(hasta));
+        return pedidoRepository.findAll(filtro, Sort.by(Sort.Direction.DESC, "fechaCreacion"));
     }
 
     /** Pedido propio por id; si no existe o es de otro cliente lanza {@link PedidoNoEncontradoException}. */
@@ -41,12 +52,25 @@ public class PedidoService {
     }
 
     /**
-     * Guarda el pedido y luego publica el evento. El comprobante y la notificación se generan
-     * en segundo plano (otros microservicios), así la respuesta al usuario no espera por ellos.
+     * Guarda el pedido (siempre nace en CREADO) y luego publica el evento. El comprobante y la notificación
+     * se generan en segundo plano (otros microservicios), así la respuesta al usuario no espera por ellos.
      */
-    public Pedido crear(Cliente cliente, Double total, String estado) {
-        Pedido guardado = pedidoRepository.save(new Pedido(cliente, total, estado));
+    public Pedido crear(Cliente cliente, Double total) {
+        Pedido guardado = pedidoRepository.save(new Pedido(cliente, total));
         eventPublisher.publicarPedidoCreado(guardado);
+        return guardado;
+    }
+
+    /**
+     * Avanza el pedido en su ciclo de vida. La validación de la transición la hace la entidad
+     * ({@link Pedido#cambiarEstado}); si no es válida se lanza TransicionInvalidaException (409).
+     */
+    @Transactional
+    public Pedido cambiarEstado(Long id, EstadoPedido destino, Cliente cliente) {
+        Pedido pedido = obtener(id, cliente);
+        EstadoPedido anterior = pedido.cambiarEstado(destino);
+        Pedido guardado = pedidoRepository.save(pedido);
+        log.info("Pedido {} cambió de {} a {}", id, anterior, destino);
         return guardado;
     }
 
