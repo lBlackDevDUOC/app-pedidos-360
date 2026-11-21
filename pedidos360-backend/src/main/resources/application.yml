@@ -50,6 +50,31 @@ spring:
         # Un mensaje rechazado nunca se re-encola en bucle: va al DLX
         default-requeue-rejected: false
 
+  # ---------------------------------------------------------------- Conexión a Kafka (productor)
+  kafka:
+    # Los 3 brokers: el cliente solo necesita uno vivo para descubrir el resto del clúster.
+    # En la EC2-1 se sobrescribe con KAFKA_BOOTSTRAP_SERVERS = <ip-privada-ec2-3>:9092,9093,9094
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092,localhost:9093,localhost:9094}
+    client-id: ms-pedidos
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      # all: el líder confirma solo cuando el mensaje está en todas las réplicas sincronizadas (mín. 2 por
+      # min.insync.replicas del tópico). Junto con RF=3 se puede perder un broker sin perder eventos.
+      acks: all
+      retries: 5
+      compression-type: lz4
+      properties:
+        # Idempotencia: si un reintento duplica el envío, el broker lo descarta (exactly-once por partición)
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        # Agrupa envíos durante 10 ms en un solo request (más rendimiento, latencia despreciable)
+        linger.ms: 10
+        # Si Kafka no responde, el request HTTP no queda colgado: falla en 5 s y se registra en el log
+        max.block.ms: 5000
+        request.timeout.ms: 10000
+        delivery.timeout.ms: 30000
+
 # ---------------------------------------------------------------- Topología de mensajería (centralizada)
 # Todos los nombres de exchanges, colas y routing keys del microservicio se definen SOLO aquí.
 # Las clases Java los leen a través de RabbitProperties (@ConfigurationProperties).
@@ -76,6 +101,13 @@ app:
       max-mensajes-cola: 1000      # al superar el límite se descartan los más antiguos (a la DLQ)
       ttl-dlq-ms: 86400000         # 24 h en cuarentena y luego se elimina
       max-mensajes-dlq: 5000
+
+  # ---------------------------------------------------------------- Tópicos Kafka (centralizados)
+  # Los crea deploy/servidor-streaming/crear-topicos.sh con 3 particiones y 3 réplicas.
+  kafka:
+    topicos:
+      pedidos: orders.events        # hechos de negocio (key = id del pedido) → ms-report y ms-audit
+      auditoria: audit.timeline     # quién/qué/cuándo/desde dónde (key = id del evento) → ms-audit
 
 # Orígenes permitidos por CORS (frontend Angular)
 pedidos360:

@@ -65,6 +65,12 @@
             <artifactId>spring-boot-starter-amqp</artifactId>
         </dependency>
 
+        <!-- Streaming de eventos de negocio con Apache Kafka (Spring for Apache Kafka) -->
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+
         <!-- Validación de propiedades de configuración y de mensajes recibidos -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

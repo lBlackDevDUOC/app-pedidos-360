@@ -1,6 +1,8 @@
 package cl.duoc.pedidos360.service;
 
+import cl.duoc.pedidos360.messaging.producer.EventoNegocioPublisher;
 import cl.duoc.pedidos360.messaging.producer.PedidoEventPublisher;
+import cl.duoc.pedidos360.model.Actor;
 import cl.duoc.pedidos360.model.Cliente;
 import cl.duoc.pedidos360.model.EstadoPedido;
 import cl.duoc.pedidos360.model.Pedido;
@@ -10,6 +12,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -24,22 +27,26 @@ class PedidoServiceTest {
 
     private PedidoRepository repository;
     private PedidoEventPublisher publisher;
+    private EventoNegocioPublisher eventosNegocio;
+    private final Actor actor = new Actor("oid-1", "Ana", List.of("Cliente"), "10.0.0.1", "JUnit");
     private PedidoService service;
 
     @BeforeEach
     void preparar() {
         repository = mock(PedidoRepository.class);
         publisher = mock(PedidoEventPublisher.class);
-        service = new PedidoService(repository, publisher);
+        eventosNegocio = mock(EventoNegocioPublisher.class);
+        service = new PedidoService(repository, publisher, eventosNegocio);
         when(repository.save(any(Pedido.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
     @Test
     void crear_guardaYPublicaElEvento() {
-        Pedido pedido = service.crear(new Cliente("oid-1", "Ana", "ana@duoc.cl"), 15000.0);
+        Pedido pedido = service.crear(new Cliente("oid-1", "Ana", "ana@duoc.cl"), 15000.0, actor);
 
         verify(repository).save(pedido);
         verify(publisher).publicarPedidoCreado(pedido);
+        verify(eventosNegocio).pedidoCreado(pedido, actor);
     }
 
     @Test
@@ -73,10 +80,11 @@ class PedidoServiceTest {
         Pedido pedido = new Pedido(cliente, 1000.0);
         when(repository.findById(7L)).thenReturn(Optional.of(pedido));
 
-        Pedido resultado = service.cambiarEstado(7L, EstadoPedido.ACEPTADO, cliente);
+        Pedido resultado = service.cambiarEstado(7L, EstadoPedido.ACEPTADO, cliente, actor);
 
         assertThat(resultado.getEstado()).isEqualTo(EstadoPedido.ACEPTADO);
         verify(repository).save(pedido);
+        verify(eventosNegocio).estadoCambiado(pedido, EstadoPedido.CREADO, actor);
     }
 
     @Test
@@ -85,9 +93,10 @@ class PedidoServiceTest {
         cliente.setId(1L);
         when(repository.findById(7L)).thenReturn(Optional.of(new Pedido(cliente, 1000.0)));
 
-        assertThatThrownBy(() -> service.cambiarEstado(7L, EstadoPedido.DESPACHADO, cliente))
+        assertThatThrownBy(() -> service.cambiarEstado(7L, EstadoPedido.DESPACHADO, cliente, actor))
                 .isInstanceOf(TransicionInvalidaException.class);
         verify(repository, never()).save(any());
+        verify(eventosNegocio, never()).estadoCambiado(any(), any(), any());
     }
 
     @Test

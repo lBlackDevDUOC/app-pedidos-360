@@ -1,6 +1,8 @@
 package cl.duoc.pedidos360.service;
 
+import cl.duoc.pedidos360.messaging.producer.EventoNegocioPublisher;
 import cl.duoc.pedidos360.messaging.producer.PedidoEventPublisher;
+import cl.duoc.pedidos360.model.Actor;
 import cl.duoc.pedidos360.model.Cliente;
 import cl.duoc.pedidos360.model.EstadoPedido;
 import cl.duoc.pedidos360.model.Pedido;
@@ -21,8 +23,11 @@ import static cl.duoc.pedidos360.repository.PedidoSpecs.creadoHasta;
 import static cl.duoc.pedidos360.repository.PedidoSpecs.delCliente;
 
 /**
- * Lógica de negocio de pedidos. No conoce RabbitMQ: anuncia los pedidos nuevos a través de
- * {@link PedidoEventPublisher} y recibe el comprobante ya traducido a parámetros simples.
+ * Lógica de negocio de pedidos. No conoce RabbitMQ ni Kafka: solo habla con dos interfaces.
+ * <ul>
+ *   <li>{@link PedidoEventPublisher} (RabbitMQ): comando de trabajo "generar comprobante y notificar".</li>
+ *   <li>{@link EventoNegocioPublisher} (Kafka): hechos de negocio para reportería y auditoría en tiempo real.</li>
+ * </ul>
  */
 @Service
 public class PedidoService {
@@ -31,10 +36,13 @@ public class PedidoService {
 
     private final PedidoRepository pedidoRepository;
     private final PedidoEventPublisher eventPublisher;
+    private final EventoNegocioPublisher eventoNegocioPublisher;
 
-    public PedidoService(PedidoRepository pedidoRepository, PedidoEventPublisher eventPublisher) {
+    public PedidoService(PedidoRepository pedidoRepository, PedidoEventPublisher eventPublisher,
+                         EventoNegocioPublisher eventoNegocioPublisher) {
         this.pedidoRepository = pedidoRepository;
         this.eventPublisher = eventPublisher;
+        this.eventoNegocioPublisher = eventoNegocioPublisher;
     }
 
     /** Pedidos del cliente con filtros opcionales por estado y rango de fecha de creación. */
@@ -55,21 +63,24 @@ public class PedidoService {
      * Guarda el pedido (siempre nace en CREADO) y luego publica el evento. El comprobante y la notificación
      * se generan en segundo plano (otros microservicios), así la respuesta al usuario no espera por ellos.
      */
-    public Pedido crear(Cliente cliente, Double total) {
+    public Pedido crear(Cliente cliente, Double total, Actor actor) {
         Pedido guardado = pedidoRepository.save(new Pedido(cliente, total));
         eventPublisher.publicarPedidoCreado(guardado);
+        eventoNegocioPublisher.pedidoCreado(guardado, actor);
         return guardado;
     }
 
     /**
      * Avanza el pedido en su ciclo de vida. La validación de la transición la hace la entidad
      * ({@link Pedido#cambiarEstado}); si no es válida se lanza TransicionInvalidaException (409).
+     * El evento a Kafka se publica recién después del commit (ver KafkaEventoNegocioPublisher).
      */
     @Transactional
-    public Pedido cambiarEstado(Long id, EstadoPedido destino, Cliente cliente) {
+    public Pedido cambiarEstado(Long id, EstadoPedido destino, Cliente cliente, Actor actor) {
         Pedido pedido = obtener(id, cliente);
         EstadoPedido anterior = pedido.cambiarEstado(destino);
         Pedido guardado = pedidoRepository.save(pedido);
+        eventoNegocioPublisher.estadoCambiado(guardado, anterior, actor);
         log.info("Pedido {} cambió de {} a {}", id, anterior, destino);
         return guardado;
     }

@@ -32,6 +32,14 @@ class ArquitecturaTest {
     }
 
     @Test
+    void negocioNoDependeDeKafka() {
+        noClasses().that().resideInAnyPackage("..controller..", "..service..", "..model..", "..repository..")
+                .should().dependOnClassesThat().resideInAnyPackage("org.springframework.kafka..", "org.apache.kafka..")
+                .because("los servicios solo usan la interfaz EventoNegocioPublisher; Kafka vive en ..messaging..")
+                .check(clases);
+    }
+
+    @Test
     void consumidoresViveEnElPaqueteDeConsumidores() {
         methods().that().areAnnotatedWith(RabbitListener.class)
                 .should().beDeclaredInClassesThat().resideInAPackage("..messaging.consumer..")

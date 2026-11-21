@@ -5,6 +5,7 @@ import cl.duoc.pedidos360.model.EstadoPedido;
 import cl.duoc.pedidos360.model.Pedido;
 import cl.duoc.pedidos360.service.ClienteService;
 import cl.duoc.pedidos360.service.PedidoService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
@@ -43,10 +44,12 @@ public class PedidoController {
 
     private final PedidoService pedidoService;
     private final ClienteService clienteService;
+    private final ActorResolver actorResolver;
 
-    public PedidoController(PedidoService pedidoService, ClienteService clienteService) {
+    public PedidoController(PedidoService pedidoService, ClienteService clienteService, ActorResolver actorResolver) {
         this.pedidoService = pedidoService;
         this.clienteService = clienteService;
+        this.actorResolver = actorResolver;
     }
 
     /** Lista los pedidos del usuario logueado. Filtros opcionales: ?estado=ACEPTADO&desde=...&hasta=... (ISO-8601). */
@@ -72,16 +75,19 @@ public class PedidoController {
      */
     @PostMapping
     @PreAuthorize("hasAuthority('SCOPE_OT.Create')")
-    public ResponseEntity<Pedido> crear(@Valid @RequestBody PedidoRequest req, @AuthenticationPrincipal Jwt jwt) {
+    public ResponseEntity<Pedido> crear(@Valid @RequestBody PedidoRequest req, @AuthenticationPrincipal Jwt jwt,
+                                        HttpServletRequest request) {
         Cliente cliente = clienteService.obtenerOCrear(jwt);
-        return ResponseEntity.status(HttpStatus.CREATED).body(pedidoService.crear(cliente, req.total()));
+        Pedido creado = pedidoService.crear(cliente, req.total(), actorResolver.desde(jwt, request));
+        return ResponseEntity.status(HttpStatus.CREATED).body(creado);
     }
 
     /** Avanza el pedido en su ciclo de vida. Transición no permitida → 409 Conflict. */
     @PutMapping("/{id}/estado")
     @PreAuthorize("hasAuthority('SCOPE_OT.Create')")
     public Pedido cambiarEstado(@PathVariable Long id, @Valid @RequestBody CambioEstadoRequest req,
-                                @AuthenticationPrincipal Jwt jwt) {
-        return pedidoService.cambiarEstado(id, req.estado(), clienteService.obtenerOCrear(jwt));
+                                @AuthenticationPrincipal Jwt jwt, HttpServletRequest request) {
+        return pedidoService.cambiarEstado(id, req.estado(), clienteService.obtenerOCrear(jwt),
+                actorResolver.desde(jwt, request));
     }
 }

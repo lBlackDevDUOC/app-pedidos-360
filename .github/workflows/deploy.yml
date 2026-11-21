@@ -209,11 +209,12 @@ jobs:
           MQ_PRIVATE_IP: ${{ secrets.MQ_PRIVATE_IP }}
           RABBITMQ_USER: ${{ secrets.RABBITMQ_USER }}
           RABBITMQ_PASSWORD: ${{ secrets.RABBITMQ_PASSWORD }}
+          KAFKA_PRIVATE_IP: ${{ secrets.KAFKA_PRIVATE_IP }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: DB_USERNAME,DB_PASSWORD,MQ_PRIVATE_IP,RABBITMQ_USER,RABBITMQ_PASSWORD
+          envs: DB_USERNAME,DB_PASSWORD,MQ_PRIVATE_IP,RABBITMQ_USER,RABBITMQ_PASSWORD,KAFKA_PRIVATE_IP
           command_timeout: 20m
           script: |
             # Crear red personalizada de Docker si no existe
@@ -251,6 +252,7 @@ jobs:
               -e SPRING_RABBITMQ_ADDRESSSHUFFLEMODE=random \
               -e SPRING_RABBITMQ_USERNAME="$RABBITMQ_USER" \
               -e SPRING_RABBITMQ_PASSWORD="$RABBITMQ_PASSWORD" \
+              -e KAFKA_BOOTSTRAP_SERVERS="$KAFKA_PRIVATE_IP:9092,$KAFKA_PRIVATE_IP:9093,$KAFKA_PRIVATE_IP:9094" \
               --restart unless-stopped \
               pedidos360-backend
 
