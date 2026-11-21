@@ -7,7 +7,6 @@ export const environment = {
     redirectUri: window.location.origin,
     protectedResourceScopes: ['api://d4b53b0b-a9b3-42b4-b63d-71d24f58813b/OT.Create'],
   },
+  // API Gateway (valida el JWT) → ms-bff en la EC2-1 → microservicios
   apiBaseUrl: 'https://gsk99c2ala.execute-api.us-east-1.amazonaws.com',
-  // ms-rabbit-admin en producción requiere publicar la ruta /api/admin/* en el API Gateway (opcional)
-  adminApiBaseUrl: 'https://gsk99c2ala.execute-api.us-east-1.amazonaws.com',
 };

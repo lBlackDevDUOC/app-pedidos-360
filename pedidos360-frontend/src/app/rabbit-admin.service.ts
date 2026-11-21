@@ -24,11 +24,11 @@ export interface AlertaDlq {
   detectadaEn: string;
 }
 
-/** Consume ms-rabbit-admin. MsalInterceptor agrega el Bearer token (mismo scope que ms-pedidos). */
+/** Consume ms-rabbit-admin a través del BFF (solo Admin). MsalInterceptor agrega el Bearer token. */
 @Injectable({ providedIn: 'root' })
 export class RabbitAdminService {
   private http = inject(HttpClient);
-  private api = `${environment.adminApiBaseUrl}/api/admin`;
+  private api = `${environment.apiBaseUrl}/api/admin`;
 
   listarColas(): Observable<Cola[]> {
     return this.http.get<Cola[]>(`${this.api}/queues`);

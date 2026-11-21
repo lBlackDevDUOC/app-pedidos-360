@@ -9,6 +9,6 @@ export const environment = {
     redirectUri: window.location.origin,
     protectedResourceScopes: ['api://d4b53b0b-a9b3-42b4-b63d-71d24f58813b/OT.Create'],
   },
-  apiBaseUrl: 'http://localhost:8080', // ms-pedidos
-  adminApiBaseUrl: 'http://localhost:8083', // ms-rabbit-admin
+  // ms-bff: única puerta de entrada (enruta a pedidos, catálogo, reportes, auditoría y administración)
+  apiBaseUrl: 'http://localhost:8088',
 };
