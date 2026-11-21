@@ -43,7 +43,8 @@ jobs:
       # Pruebas de todos los microservicios: si alguna falla, no se despliega nada
       - name: Pruebas y empaquetado de microservicios
         run: |
-          for ms in pedidos360-backend pedidos360-documentos pedidos360-notificaciones pedidos360-rabbit-admin; do
+          for ms in pedidos360-backend pedidos360-documentos pedidos360-notificaciones pedidos360-rabbit-admin \
+                    pedidos360-report pedidos360-audit pedidos360-kafka-admin; do
             echo "::group::$ms"
             mvn -B -ntp -f $ms/pom.xml verify
             echo "::endgroup::"
@@ -60,7 +61,10 @@ jobs:
 
       - name: Armar paquete del servidor de streaming
         run: |
-          mkdir -p streaming
+          mkdir -p streaming/report streaming/audit streaming/kafka-admin
+          cp pedidos360-report/target/*-SNAPSHOT.jar      streaming/report/app.jar
+          cp pedidos360-audit/target/*-SNAPSHOT.jar       streaming/audit/app.jar
+          cp pedidos360-kafka-admin/target/*-SNAPSHOT.jar streaming/kafka-admin/app.jar
           cp deploy/servidor-streaming/* streaming/
           ls -R streaming
 
@@ -106,25 +110,32 @@ jobs:
           KAFKA_PRIVATE_IP: ${{ secrets.KAFKA_PRIVATE_IP }}
           KAFKA_UI_USER: ${{ secrets.KAFKA_UI_USER }}
           KAFKA_UI_PASSWORD: ${{ secrets.KAFKA_UI_PASSWORD }}
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         with:
           host: ${{ secrets.KAFKA_EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: KAFKA_PRIVATE_IP,KAFKA_UI_USER,KAFKA_UI_PASSWORD
-          command_timeout: 20m
+          envs: KAFKA_PRIVATE_IP,KAFKA_UI_USER,KAFKA_UI_PASSWORD,DB_USERNAME,DB_PASSWORD
+          command_timeout: 25m
           script: |
             set -e
             cd /home/ec2-user/streaming
             sh preparar-ec2.sh
 
             # Los brokers se anuncian con la IP privada: los clientes de la EC2-1 llegan por dentro de la VPC
-            printf 'KAFKA_ADVERTISED_HOST=%s\nKAFKA_UI_USER=%s\nKAFKA_UI_PASSWORD=%s\n' \
-              "$KAFKA_PRIVATE_IP" "$KAFKA_UI_USER" "$KAFKA_UI_PASSWORD" > .env
+            printf 'KAFKA_ADVERTISED_HOST=%s\nKAFKA_UI_USER=%s\nKAFKA_UI_PASSWORD=%s\nDB_USERNAME=%s\nDB_PASSWORD=%s\n' \
+              "$KAFKA_PRIVATE_IP" "$KAFKA_UI_USER" "$KAFKA_UI_PASSWORD" "$DB_USERNAME" "$DB_PASSWORD" > .env
             chmod 600 .env
 
+            sudo docker build -q -f Dockerfile.jar --build-arg JAR=report/app.jar      -t pedidos360-ms-report .
+            sudo docker build -q -f Dockerfile.jar --build-arg JAR=audit/app.jar       -t pedidos360-ms-audit .
+            sudo docker build -q -f Dockerfile.jar --build-arg JAR=kafka-admin/app.jar -t pedidos360-ms-kafka-admin .
+
+            # 1) Clúster Kafka + Kafka-UI, 2) tópicos (crea los nuevos y reaplica la config), 3) microservicios
             sudo docker compose up -d --remove-orphans
-            # kafka-init corre una vez por despliegue: crea los tópicos nuevos y reaplica la configuración
             sudo docker compose run --rm kafka-init
+            sudo docker compose --profile app up -d --no-build --remove-orphans --force-recreate ms-report ms-audit ms-kafka-admin
             sudo docker image prune -f
             sudo docker compose ps
 

@@ -33,7 +33,8 @@ public class PedidoEventoListener {
         this.validator = validator;
     }
 
-    @KafkaListener(id = "report-pedidos", topics = "${app.kafka.topicos.pedidos}")
+    // idIsGroup=false: el "id" solo nombra el contenedor; el consumer group es el de spring.kafka.consumer.group-id
+    @KafkaListener(id = "report-pedidos", idIsGroup = false, topics = "${app.kafka.topicos.pedidos}")
     public void onEvento(@Payload EventoPedido evento,
                          @Header(KafkaHeaders.RECEIVED_PARTITION) int particion,
                          @Header(KafkaHeaders.OFFSET) long offset) {

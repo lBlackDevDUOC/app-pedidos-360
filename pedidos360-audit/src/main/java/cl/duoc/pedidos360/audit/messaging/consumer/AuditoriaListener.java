@@ -22,6 +22,7 @@ import java.util.stream.Collectors;
  *   <li>{@code orders.events}: los mismos hechos que lee ms-report, pero con OTRO consumer group. Kafka entrega
  *       cada mensaje una vez por grupo: report y audit reciben todo, sin quitarse mensajes.</li>
  * </ul>
+ * Ambos listeners pertenecen al grupo audit-service (idIsGroup=false: el id solo nombra el contenedor).
  * Cada listener indica a qué DTO deserializar (propiedad spring.json.value.default.type).
  * La lógica vive en {@link AuditoriaService}; aquí solo se valida y se traduce el mensaje.
  */
@@ -38,7 +39,7 @@ public class AuditoriaListener {
         this.validator = validator;
     }
 
-    @KafkaListener(id = "audit-timeline", topics = "${app.kafka.topicos.auditoria}",
+    @KafkaListener(id = "audit-timeline", idIsGroup = false, topics = "${app.kafka.topicos.auditoria}",
             properties = "spring.json.value.default.type=cl.duoc.pedidos360.audit.messaging.event.EventoAuditoria")
     public void onAuditoria(ConsumerRecord<String, EventoAuditoria> mensaje) {
         if (esLapida(mensaje)) return;
@@ -51,7 +52,7 @@ public class AuditoriaListener {
                 e.ip(), e.userAgent(), e.origen(), e.traceId(), e.correlationId()));
     }
 
-    @KafkaListener(id = "audit-pedidos", topics = "${app.kafka.topicos.pedidos}",
+    @KafkaListener(id = "audit-pedidos", idIsGroup = false, topics = "${app.kafka.topicos.pedidos}",
             properties = "spring.json.value.default.type=cl.duoc.pedidos360.audit.messaging.event.EventoPedido")
     public void onPedido(ConsumerRecord<String, EventoPedido> mensaje) {
         if (esLapida(mensaje)) return;

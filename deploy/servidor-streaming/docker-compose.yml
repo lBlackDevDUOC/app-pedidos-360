@@ -199,7 +199,80 @@ services:
       SPRING_SECURITY_USER_PASSWORD: ${KAFKA_UI_PASSWORD:-admin}
       JAVA_OPTS: -Xms128m -Xmx384m
 
+  # ---------------------------------------------------------------- Base de datos analítica (report + audit)
+  # Separada de la BD de ms-pedidos: los reportes y la auditoría nunca cargan la base transaccional.
+  # Sin puertos publicados: solo la alcanzan los microservicios de esta máquina.
+  postgres-analitica:
+    image: postgres:16-alpine
+    container_name: pedidos360-postgres-analitica
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      POSTGRES_DB: report_db
+      POSTGRES_USER: ${DB_USERNAME:-pedidos360}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-pedidos360}
+    volumes:
+      - analitica_data:/var/lib/postgresql/data
+      - ./init-analitica.sql:/docker-entrypoint-initdb.d/init-analitica.sql:ro   # crea audit_db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d report_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------- Microservicios de streaming
+  # Se conectan a Kafka por el listener INTERNAL (red Docker): no necesitan abrir 9092-9094 hacia afuera.
+  # En la EC2 las imágenes las construye el pipeline desde los .jar (Dockerfile.jar); en local:
+  #   docker compose --profile init --profile app up -d --build
+  ms-report:
+    <<: &ms-streaming
+      profiles: ["app"]
+      restart: unless-stopped
+      mem_limit: 384m
+      depends_on:
+        kafka-1:
+          condition: service_healthy
+        postgres-analitica:
+          condition: service_healthy
+    image: pedidos360-ms-report:latest
+    build: ../../pedidos360-report
+    container_name: pedidos360-ms-report
+    ports:
+      - "8084:8084"     # API de KPIs: el Security Group solo la abre a la EC2-1 (BFF)
+    environment: &ms-env
+      KAFKA_BOOTSTRAP_SERVERS: kafka-1:29092,kafka-2:29092,kafka-3:29092
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-analitica:5432/report_db
+      DB_USERNAME: ${DB_USERNAME:-pedidos360}
+      DB_PASSWORD: ${DB_PASSWORD:-pedidos360}
+      JAVA_TOOL_OPTIONS: -Djava.net.preferIPv4Stack=true -Xms64m -Xmx192m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Xss512k
+
+  ms-audit:
+    <<: *ms-streaming
+    image: pedidos360-ms-audit:latest
+    build: ../../pedidos360-audit
+    container_name: pedidos360-ms-audit
+    ports:
+      - "8085:8085"     # API de auditoría (solo lectura)
+    environment:
+      <<: *ms-env
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-analitica:5432/audit_db
+
+  ms-kafka-admin:
+    <<: *ms-streaming
+    image: pedidos360-ms-kafka-admin:latest
+    build: ../../pedidos360-kafka-admin
+    container_name: pedidos360-ms-kafka-admin
+    depends_on:
+      kafka-1:
+        condition: service_healthy
+    ports:
+      - "8086:8086"     # API de administración de Kafka
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka-1:29092,kafka-2:29092,kafka-3:29092
+      JAVA_TOOL_OPTIONS: -Djava.net.preferIPv4Stack=true -Xms64m -Xmx192m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Xss512k
+
 volumes:
+  analitica_data:
   zk1_data:
   zk1_log:
   zk2_data:
