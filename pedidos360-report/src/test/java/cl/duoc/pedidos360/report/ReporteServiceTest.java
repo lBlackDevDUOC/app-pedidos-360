@@ -2,6 +2,7 @@ package cl.duoc.pedidos360.report;
 
 import cl.duoc.pedidos360.report.messaging.event.EventoPedido;
 import cl.duoc.pedidos360.report.repository.EventoProcesadoRepository;
+import cl.duoc.pedidos360.report.repository.ItemVendidoRepository;
 import cl.duoc.pedidos360.report.repository.PedidoProyeccionRepository;
 import cl.duoc.pedidos360.report.service.Rango;
 import cl.duoc.pedidos360.report.service.ReporteService;
@@ -14,6 +15,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -30,19 +32,21 @@ class ReporteServiceTest {
     private PedidoProyeccionRepository proyecciones;
     @Autowired
     private EventoProcesadoRepository procesados;
+    @Autowired
+    private ItemVendidoRepository items;
 
     private ReporteService service;
 
     @BeforeEach
     void preparar() {
         Clock reloj = Clock.fixed(AHORA.atZone(ZONA).toInstant(), ZONA);
-        service = new ReporteService(proyecciones, procesados, reloj);
+        service = new ReporteService(proyecciones, procesados, items, reloj);
     }
 
     private EventoPedido evento(long pedidoId, String estado, double total, LocalDateTime creado,
                                 LocalDateTime entregado, Instant ocurrido) {
         return new EventoPedido(UUID.randomUUID().toString(), "Order" + estado, 1, ocurrido, "ms-pedidos", "t", "c",
-                pedidoId, "Cliente", total, null, estado, creado, entregado);
+                pedidoId, "Cliente", total, null, estado, creado, entregado, null);
     }
 
     @Test
@@ -85,6 +89,26 @@ class ReporteServiceTest {
         service.registrar(evento(6, "CREADO", 3000, AHORA.minusMinutes(5), null, t.minusSeconds(60)));
 
         assertThat(proyecciones.findById(6L)).get().extracting("estado").isEqualTo("ACEPTADO");
+    }
+
+    @Test
+    void rankingDeProductosIgnoraPedidosCancelados() {
+        Instant t = AHORA.atZone(ZONA).toInstant();
+        var pan = new EventoPedido.Item(1L, "Pan", 3, 1000.0);
+        var cafe = new EventoPedido.Item(2L, "Café", 1, 2000.0);
+        var panCancelado = new EventoPedido.Item(1L, "Pan", 1, 1000.0);
+        service.registrar(new EventoPedido("a", "OrderCreated", 1, t, "ms", "t", "c", 10L, "C", 5000.0, null,
+                "CREADO", AHORA.minusHours(1), null, List.of(pan, cafe)));
+        service.registrar(new EventoPedido("b", "OrderCreated", 1, t, "ms", "t", "c", 11L, "C", 1000.0, null,
+                "CREADO", AHORA.minusHours(1), null, List.of(panCancelado)));
+        service.registrar(new EventoPedido("c", "OrderCancelled", 1, t.plusSeconds(5), "ms", "t", "c", 11L, "C",
+                1000.0, "CREADO", "CANCELADO", AHORA.minusHours(1), null, List.of(panCancelado)));
+
+        var top = service.topProductos(Rango.LAST_7D, 5);
+
+        assertThat(top).extracting(ReporteService.TopProducto::nombre).containsExactly("Pan", "Café");
+        assertThat(top.get(0).unidades()).isEqualTo(3);
+        assertThat(top.get(0).monto()).isEqualTo(3000.0);
     }
 
     @Test

@@ -5,6 +5,7 @@ import cl.duoc.pedidos360.messaging.producer.PedidoEventPublisher;
 import cl.duoc.pedidos360.model.Actor;
 import cl.duoc.pedidos360.model.Cliente;
 import cl.duoc.pedidos360.model.EstadoPedido;
+import cl.duoc.pedidos360.model.ItemPedido;
 import cl.duoc.pedidos360.model.Pedido;
 import cl.duoc.pedidos360.repository.PedidoRepository;
 import org.slf4j.Logger;
@@ -16,6 +17,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static cl.duoc.pedidos360.repository.PedidoSpecs.conEstado;
 import static cl.duoc.pedidos360.repository.PedidoSpecs.creadoDesde;
@@ -37,12 +42,19 @@ public class PedidoService {
     private final PedidoRepository pedidoRepository;
     private final PedidoEventPublisher eventPublisher;
     private final EventoNegocioPublisher eventoNegocioPublisher;
+    private final Catalogo catalogo;
+
+    /** Estados en los que el stock del pedido ya está descontado: si se cancela desde aquí, hay que reponerlo. */
+    private static final Set<EstadoPedido> CON_STOCK_DESCONTADO = Set.of(EstadoPedido.ACEPTADO, EstadoPedido.EN_PREPARACION);
+
+    public record LineaPedido(Long productoId, int cantidad) {}
 
     public PedidoService(PedidoRepository pedidoRepository, PedidoEventPublisher eventPublisher,
-                         EventoNegocioPublisher eventoNegocioPublisher) {
+                         EventoNegocioPublisher eventoNegocioPublisher, Catalogo catalogo) {
         this.pedidoRepository = pedidoRepository;
         this.eventPublisher = eventPublisher;
         this.eventoNegocioPublisher = eventoNegocioPublisher;
+        this.catalogo = catalogo;
     }
 
     /**
@@ -72,7 +84,29 @@ public class PedidoService {
      * se generan en segundo plano (otros microservicios), así la respuesta al usuario no espera por ellos.
      */
     public Pedido crear(Cliente cliente, Double total, Actor actor) {
-        Pedido guardado = pedidoRepository.save(new Pedido(cliente, total));
+        return guardarYPublicar(new Pedido(cliente, total), actor);
+    }
+
+    /**
+     * Pedido con productos del catálogo. Los precios y nombres se toman de ms-catalog (nunca del navegador:
+     * el cliente no puede inventar el precio). El stock NO se descuenta aquí, sino cuando un Operador lo acepta.
+     */
+    public Pedido crear(Cliente cliente, List<LineaPedido> lineas, Actor actor) {
+        Map<Long, Catalogo.ProductoCatalogo> productos = catalogo.productos(
+                lineas.stream().map(LineaPedido::productoId).toList()).stream()
+                .collect(Collectors.toMap(Catalogo.ProductoCatalogo::id, Function.identity()));
+        List<ItemPedido> items = lineas.stream().map(l -> {
+            Catalogo.ProductoCatalogo p = productos.get(l.productoId());
+            if (p == null || !p.activo()) {
+                throw new Catalogo.ProductoNoDisponibleException("Producto no disponible: " + l.productoId());
+            }
+            return new ItemPedido(p.id(), p.nombre(), l.cantidad(), p.precio());
+        }).toList();
+        return guardarYPublicar(new Pedido(cliente, items), actor);
+    }
+
+    private Pedido guardarYPublicar(Pedido nuevo, Actor actor) {
+        Pedido guardado = pedidoRepository.save(nuevo);
         eventPublisher.publicarPedidoCreado(guardado);
         eventoNegocioPublisher.pedidoCreado(guardado, actor);
         return guardado;
@@ -92,6 +126,12 @@ public class PedidoService {
                     "Un cliente solo puede cancelar sus pedidos; el resto de los estados los gestiona un Operador");
         }
         EstadoPedido anterior = pedido.cambiarEstado(destino);
+        if (pedido.tieneItems() && destino == EstadoPedido.ACEPTADO) {
+            // Regla del caso: el stock baja al aceptar. Si no alcanza, lanza excepción y el pedido sigue CREADO
+            catalogo.descontarStock(pedido.getId(), pedido.getItems());
+        } else if (pedido.tieneItems() && destino == EstadoPedido.CANCELADO && CON_STOCK_DESCONTADO.contains(anterior)) {
+            catalogo.reponerStock(pedido.getId());
+        }
         Pedido guardado = pedidoRepository.save(pedido);
         eventoNegocioPublisher.estadoCambiado(guardado, anterior, actor);
         log.info("Pedido {} cambió de {} a {}", id, anterior, destino);

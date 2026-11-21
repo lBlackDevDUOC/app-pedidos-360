@@ -6,7 +6,12 @@ import cl.duoc.pedidos360.model.Pedido;
 import cl.duoc.pedidos360.service.ClienteService;
 import cl.duoc.pedidos360.service.PedidoService;
 import jakarta.servlet.http.HttpServletRequest;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Size;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -35,9 +40,24 @@ import java.util.List;
 @RequestMapping("/api/pedidos")
 public class PedidoController {
 
-    /** Cuerpo del POST: el cliente no se envía (se toma del token) y el estado inicial siempre es CREADO. */
-    public record PedidoRequest(@NotNull(message = "El total es obligatorio")
-                                @Positive(message = "El total debe ser mayor a 0") Double total) {}
+    /**
+     * Cuerpo del POST. Lo normal es mandar items (productos del catálogo): el total lo calcula el backend con los
+     * precios del catálogo. "total" sin items queda solo por compatibilidad con las entregas anteriores.
+     * El cliente se toma del token y el estado inicial siempre es CREADO.
+     */
+    public record PedidoRequest(@Positive(message = "El total debe ser mayor a 0") Double total,
+                                @Size(max = 50, message = "Máximo 50 líneas por pedido") List<@Valid ItemRequest> items) {
+
+        @JsonIgnore
+        @AssertTrue(message = "Indica los productos (items) o, en su defecto, el total")
+        public boolean isItemsOTotal() {
+            return (items != null && !items.isEmpty()) || total != null;
+        }
+    }
+
+    public record ItemRequest(@NotNull(message = "productoId es obligatorio") Long productoId,
+                              @NotNull @Min(value = 1, message = "La cantidad mínima es 1")
+                              @Max(value = 100, message = "La cantidad máxima es 100") Integer cantidad) {}
 
     /** Cuerpo del PUT /{id}/estado. Un valor que no sea un EstadoPedido válido responde 400. */
     public record CambioEstadoRequest(@NotNull(message = "El estado es obligatorio") EstadoPedido estado) {}
@@ -82,7 +102,11 @@ public class PedidoController {
     public ResponseEntity<Pedido> crear(@Valid @RequestBody PedidoRequest req, @AuthenticationPrincipal Jwt jwt,
                                         HttpServletRequest request) {
         Cliente cliente = clienteService.obtenerOCrear(jwt);
-        Pedido creado = pedidoService.crear(cliente, req.total(), actorResolver.desde(jwt, request));
+        var actor = actorResolver.desde(jwt, request);
+        Pedido creado = req.items() != null && !req.items().isEmpty()
+                ? pedidoService.crear(cliente, req.items().stream()
+                        .map(i -> new PedidoService.LineaPedido(i.productoId(), i.cantidad())).toList(), actor)
+                : pedidoService.crear(cliente, req.total(), actor);
         return ResponseEntity.status(HttpStatus.CREATED).body(creado);
     }
 

@@ -1,6 +1,7 @@
 package cl.duoc.pedidos360.controller;
 
 import cl.duoc.pedidos360.model.TransicionInvalidaException;
+import cl.duoc.pedidos360.service.Catalogo;
 import cl.duoc.pedidos360.service.OperacionNoPermitidaException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -33,10 +34,32 @@ public class ErroresApiHandler {
         return problema;
     }
 
+    @ExceptionHandler(Catalogo.StockInsuficienteException.class)
+    public ProblemDetail sinStock(Catalogo.StockInsuficienteException e) {
+        ProblemDetail problema = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
+        problema.setTitle("Stock insuficiente: el pedido sigue en CREADO");
+        return problema;
+    }
+
+    @ExceptionHandler(Catalogo.ProductoNoDisponibleException.class)
+    public ProblemDetail productoNoDisponible(Catalogo.ProductoNoDisponibleException e) {
+        ProblemDetail problema = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
+        problema.setTitle("Producto no disponible");
+        return problema;
+    }
+
+    @ExceptionHandler(Catalogo.CatalogoNoDisponibleException.class)
+    public ProblemDetail catalogoCaido(Catalogo.CatalogoNoDisponibleException e) {
+        ProblemDetail problema = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage());
+        problema.setTitle("Catálogo no disponible");
+        return problema;
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ProblemDetail datosInvalidos(MethodArgumentNotValidException e) {
-        String detalle = e.getBindingResult().getFieldErrors().stream()
+        String detalle = e.getBindingResult().getAllErrors().stream()
                 .map(err -> err.getDefaultMessage())
+                .distinct()
                 .collect(Collectors.joining(", "));
         ProblemDetail problema = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, detalle);
         problema.setTitle("Datos inválidos");

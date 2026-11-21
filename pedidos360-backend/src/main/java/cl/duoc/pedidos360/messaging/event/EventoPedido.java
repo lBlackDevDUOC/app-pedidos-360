@@ -2,6 +2,7 @@ package cl.duoc.pedidos360.messaging.event;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * Evento de negocio publicado en el tópico {@code orders.events} cada vez que un pedido nace o cambia de estado.
@@ -23,6 +24,7 @@ import java.time.LocalDateTime;
  * @param estadoAnterior null en OrderCreated
  * @param fechaCreacion  junto con fechaEntrega permite calcular el lead time
  * @param actorId        quién provocó el cambio (oid de Entra ID)
+ * @param items          productos del pedido (vacío en pedidos de monto libre)
  */
 public record EventoPedido(
         String eventoId,
@@ -40,7 +42,11 @@ public record EventoPedido(
         String estado,
         LocalDateTime fechaCreacion,
         LocalDateTime fechaEntrega,
-        String actorId) {
+        String actorId,
+        List<Item> items) {
+
+    /** Línea del pedido: ms-report la usa para el ranking de productos más vendidos. */
+    public record Item(Long productoId, String nombre, Integer cantidad, Double precioUnitario) {}
 
     public static final int VERSION_ACTUAL = 1;
 }

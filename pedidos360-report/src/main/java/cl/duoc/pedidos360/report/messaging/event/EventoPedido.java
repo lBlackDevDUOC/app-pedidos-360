@@ -7,6 +7,7 @@ import jakarta.validation.constraints.PositiveOrZero;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * DTO propio de ms-report para los mensajes de {@code orders.events}. No se comparte código con ms-pedidos:
@@ -29,7 +30,12 @@ public record EventoPedido(
         String estadoAnterior,
         @NotBlank String estado,
         @NotNull LocalDateTime fechaCreacion,
-        LocalDateTime fechaEntrega) {
+        LocalDateTime fechaEntrega,
+        List<Item> items) {
+
+    /** Línea del pedido (null o vacío en pedidos de monto libre). */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Item(Long productoId, String nombre, Integer cantidad, Double precioUnitario) {}
 
     /** Versión del esquema que este consumidor sabe interpretar. */
     public static final int VERSION_SOPORTADA = 1;

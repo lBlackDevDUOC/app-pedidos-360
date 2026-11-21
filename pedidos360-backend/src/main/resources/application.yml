@@ -109,6 +109,10 @@ app:
       pedidos: orders.events        # hechos de negocio (key = id del pedido) → ms-report y ms-audit
       auditoria: audit.timeline     # quién/qué/cuándo/desde dónde (key = id del evento) → ms-audit
 
+  # ---------------------------------------------------------------- ms-catalog (llamada síncrona con token relay)
+  catalogo:
+    url: ${CATALOG_URL:http://localhost:8087}
+
 # Orígenes permitidos por CORS (frontend Angular)
 pedidos360:
   cors:

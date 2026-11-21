@@ -37,6 +37,13 @@ public class ReporteController {
         return reporteService.ventasPorHora(Rango.desde(range));
     }
 
+    @Operation(summary = "Productos más vendidos (unidades) en el rango")
+    @GetMapping("/top-products")
+    public List<ReporteService.TopProducto> topProductos(@RequestParam(defaultValue = "last7d") String range,
+                                                         @RequestParam(defaultValue = "5") int limit) {
+        return reporteService.topProductos(Rango.desde(range), limit);
+    }
+
     @Operation(summary = "Pedidos en curso por estado")
     @GetMapping("/estados-activos")
     public Map<String, Long> estadosActivos() {

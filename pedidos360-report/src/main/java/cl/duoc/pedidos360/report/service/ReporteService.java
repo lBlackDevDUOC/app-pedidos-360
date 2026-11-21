@@ -2,8 +2,10 @@ package cl.duoc.pedidos360.report.service;
 
 import cl.duoc.pedidos360.report.messaging.event.EventoPedido;
 import cl.duoc.pedidos360.report.model.EventoProcesado;
+import cl.duoc.pedidos360.report.model.ItemVendido;
 import cl.duoc.pedidos360.report.model.PedidoProyeccion;
 import cl.duoc.pedidos360.report.repository.EventoProcesadoRepository;
+import cl.duoc.pedidos360.report.repository.ItemVendidoRepository;
 import cl.duoc.pedidos360.report.repository.PedidoProyeccionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,6 +21,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
+import java.util.Comparator;
+import java.util.stream.Collectors;
 
 /**
  * Lógica de reportería. No conoce Kafka: recibe un evento ya validado y actualiza la proyección; los KPIs se
@@ -31,11 +35,14 @@ public class ReporteService {
 
     private final PedidoProyeccionRepository proyecciones;
     private final EventoProcesadoRepository procesados;
+    private final ItemVendidoRepository items;
     private final Clock reloj;
 
-    public ReporteService(PedidoProyeccionRepository proyecciones, EventoProcesadoRepository procesados, Clock reloj) {
+    public ReporteService(PedidoProyeccionRepository proyecciones, EventoProcesadoRepository procesados,
+                          ItemVendidoRepository items, Clock reloj) {
         this.proyecciones = proyecciones;
         this.procesados = procesados;
+        this.items = items;
         this.reloj = reloj;
     }
 
@@ -63,6 +70,13 @@ public class ReporteService {
                     evento.fechaEntrega(), evento.ocurridoEn());
             proyecciones.save(proyeccion);
             aplicado = true;
+        }
+        // Las líneas del pedido no cambian con el estado: se guardan una sola vez (la primera vez que llegan)
+        if (evento.items() != null && !evento.items().isEmpty() && !items.existsByPedidoId(evento.pedidoId())) {
+            items.saveAll(evento.items().stream()
+                    .map(i -> new ItemVendido(evento.pedidoId(), i.productoId(), i.nombre(), i.cantidad(),
+                            redondear(i.cantidad() * i.precioUnitario())))
+                    .toList());
         }
         procesados.save(new EventoProcesado(evento.eventoId(), evento.tipo(), evento.pedidoId()));
         return aplicado;
@@ -97,6 +111,26 @@ public class ReporteService {
                 proyecciones.ultimoEvento().orElse(null),
                 Instant.now(reloj));
     }
+
+    /** Productos más vendidos (unidades) entre los pedidos no cancelados creados en el rango. */
+    @Transactional(readOnly = true)
+    public List<TopProducto> topProductos(Rango rango, int limite) {
+        LocalDateTime hasta = LocalDateTime.now(reloj);
+        List<Long> pedidos = proyecciones.findByFechaCreacionBetween(hasta.minus(rango.duracion()), hasta).stream()
+                .filter(p -> !"CANCELADO".equals(p.getEstado())).map(PedidoProyeccion::getPedidoId).toList();
+        if (pedidos.isEmpty()) return List.of();
+        Map<Long, List<ItemVendido>> porProducto = items.findByPedidoIdIn(pedidos).stream()
+                .collect(Collectors.groupingBy(ItemVendido::getProductoId));
+        return porProducto.entrySet().stream()
+                .map(e -> new TopProducto(e.getKey(), e.getValue().get(0).getNombre(),
+                        e.getValue().stream().mapToLong(ItemVendido::getCantidad).sum(),
+                        redondear(e.getValue().stream().mapToDouble(ItemVendido::getMonto).sum())))
+                .sorted(Comparator.comparingLong(TopProducto::unidades).reversed().thenComparing(TopProducto::nombre))
+                .limit(Math.max(1, Math.min(limite, 50)))
+                .toList();
+    }
+
+    public record TopProducto(Long productoId, String nombre, long unidades, double monto) {}
 
     /** Pedidos en curso (no ENTREGADO ni CANCELADO) por estado, en el orden del ciclo de vida. */
     @Transactional(readOnly = true)

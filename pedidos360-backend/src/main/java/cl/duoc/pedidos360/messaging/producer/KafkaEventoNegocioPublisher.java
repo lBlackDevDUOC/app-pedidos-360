@@ -81,7 +81,10 @@ public class KafkaEventoNegocioPublisher implements EventoNegocioPublisher {
                 pedido.getEstado().name(),
                 pedido.getFechaCreacion(),
                 pedido.getFechaEntrega(),
-                actor.id());
+                actor.id(),
+                pedido.getItems().stream()
+                        .map(i -> new EventoPedido.Item(i.getProductoId(), i.getNombre(), i.getCantidad(), i.getPrecioUnitario()))
+                        .toList());
 
         EventoAuditoria auditoria = new EventoAuditoria(
                 UUID.randomUUID().toString(),

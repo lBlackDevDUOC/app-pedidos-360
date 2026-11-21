@@ -1,6 +1,8 @@
 package cl.duoc.pedidos360.model;
 
+import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
+import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
@@ -10,6 +12,9 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 @Entity
 @Table(name = "pedidos")
@@ -25,6 +30,11 @@ public class Pedido {
     private Cliente cliente;
 
     private Double total;
+
+    /** Productos del pedido (tabla pedido_items). Un pedido sin ítems es de monto libre (compatibilidad EP1-EP4). */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "pedido_items", joinColumns = @JoinColumn(name = "pedido_id"))
+    private List<ItemPedido> items = new ArrayList<>();
 
     /** Se guarda como texto con {@link EstadoPedidoConverter}. Solo cambia a través de {@link #cambiarEstado}. */
     @Column(length = 20)
@@ -44,6 +54,17 @@ public class Pedido {
     public Pedido(Cliente cliente, Double total) {
         this.cliente = cliente;
         this.total = total;
+    }
+
+    /** Pedido con productos del catálogo: el total es la suma de las líneas (no lo manda el cliente). */
+    public Pedido(Cliente cliente, List<ItemPedido> items) {
+        this.cliente = cliente;
+        this.items = new ArrayList<>(items);
+        this.total = Math.round(items.stream().mapToDouble(ItemPedido::subtotal).sum() * 100) / 100.0;
+    }
+
+    public boolean tieneItems() {
+        return !items.isEmpty();
     }
 
     /**
@@ -74,6 +95,8 @@ public class Pedido {
 
     public Double getTotal() { return total; }
     public void setTotal(Double total) { this.total = total; }
+
+    public List<ItemPedido> getItems() { return Collections.unmodifiableList(items); }
 
     public EstadoPedido getEstado() { return estado; }
 
