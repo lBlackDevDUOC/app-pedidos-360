@@ -1,19 +1,23 @@
 name: Deploy Pedidos360
 
-# Arquitectura (EP3):
+# Arquitectura:
 #   EC2-1 (EC2_HOST)     → frontend (Nginx) + ms-pedidos + PostgreSQL
 #   EC2-2 (MQ_EC2_HOST)  → clúster RabbitMQ de 2 nodos + ms-documentos + ms-notificaciones + ms-rabbit-admin
-#   Ambas en la misma VPC: ms-pedidos llega a los 2 nodos por la IP privada (MQ_PRIVATE_IP, puertos 5672 y 5673).
+#   Todas en la misma VPC: ms-pedidos llega a los nodos RabbitMQ por la IP privada (MQ_PRIVATE_IP, puertos 5672 y 5673).
+#
+# Dos jobs:
+#   ci     → en cada push a BlackDev: compila el frontend y prueba/empaqueta todos los microservicios.
+#   deploy → SOLO a mano (pestaña Actions → "Run workflow"): las EC2 no siempre están encendidas,
+#            así que un push no debe intentar conectarse a AWS.
 
 on:
   push:
     branches: [ "BlackDev" ]
-  workflow_dispatch: # permite lanzarlo a mano desde la pestaña Actions
+  workflow_dispatch:
 
 jobs:
-  deploy:
+  ci:
     runs-on: ubuntu-latest
-
     steps:
       - name: Descargar código
         uses: actions/checkout@v4
@@ -36,7 +40,7 @@ jobs:
           java-version: '21'
           cache: maven
 
-      # Pruebas de los 4 microservicios: si alguna falla, no se despliega nada
+      # Pruebas de todos los microservicios: si alguna falla, no se despliega nada
       - name: Pruebas y empaquetado de microservicios
         run: |
           for ms in pedidos360-backend pedidos360-documentos pedidos360-notificaciones pedidos360-rabbit-admin; do
@@ -53,6 +57,30 @@ jobs:
           cp pedidos360-rabbit-admin/target/*-SNAPSHOT.jar    mensajeria/rabbit-admin/app.jar
           cp deploy/servidor-mensajeria/* rabbitmq/aplicar-policies.sh mensajeria/
           ls -R mensajeria
+
+      # El job de deploy corre en otra máquina: se le pasan los artefactos ya compilados y probados
+      - name: Guardar artefactos
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: paquetes
+          retention-days: 1
+          path: |
+            mensajeria
+            pedidos360-frontend/dist
+
+  deploy:
+    needs: ci
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Recuperar artefactos del job ci
+        uses: actions/download-artifact@v4
+        with:
+          name: paquetes
 
       # ------------------------------------------------------------------ EC2-2: servidor de mensajería
       # Se despliega primero para que RabbitMQ esté arriba cuando arranque ms-pedidos.
