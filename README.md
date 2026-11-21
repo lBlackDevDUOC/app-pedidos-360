@@ -14,6 +14,7 @@ de forma asíncrona con **RabbitMQ** → ver [Evaluación Parcial N°3](#evaluac
 - [Despliegue en AWS](#despliegue-en-aws)
 - [Evidencia de cumplimiento — Evaluación Parcial N°1](#evidencia-de-cumplimiento--evaluación-parcial-n1)
 - [Evaluación Parcial N°3 — Mensajería asíncrona con RabbitMQ](#evaluación-parcial-n3--mensajería-asíncrona-con-rabbitmq)
+- [EP5 / EFT — Streaming con Kafka, roles, catálogo y BFF](#ep5--eft--streaming-con-kafka-roles-catálogo-y-bff)
 
 ## Arquitectura
 
@@ -471,3 +472,74 @@ cd pedidos360-rabbit-admin && mvn test   # 39 tests
 ---
 
 _Repositorio entregado como parte de las Evaluaciones Parciales N°1, N°2 y N°3 — DSY1107 Desarrollo Cloud Native I._
+
+---
+
+## EP5 / EFT — Streaming con Kafka, roles, catálogo y BFF
+
+### Arquitectura final
+
+```
+Angular (MSAL) ─▶ Entra ID (App Roles: Admin, Operador, Cliente, Auditor)
+     │ Bearer JWT
+     ▼
+AWS API Gateway (JWT Authorizer) ─▶ EC2-1 ms-bff :8080 (Spring Cloud Gateway: valida JWT + rol)
+                                         ├─▶ ms-pedidos ──AMQP──▶ EC2-2 RabbitMQ ×2 (comandos: comprobante, correo)
+                                         │        └─────Kafka───▶ EC2-3 orders.events / audit.timeline (hechos)
+                                         ├─▶ ms-catalog (el stock baja al aceptar; token relay)
+                                         ├─▶ EC2-3 ms-report      (consumer group report-service → KPIs)
+                                         ├─▶ EC2-3 ms-audit       (consumer group audit-service  → timeline)
+                                         ├─▶ EC2-3 ms-kafka-admin (tópicos, configs, consumer groups, lag)
+                                         └─▶ EC2-2 ms-rabbit-admin
+```
+
+**RabbitMQ = comandos** (un consumidor los ejecuta y se borran). **Kafka = hechos** (quedan en un log; varios
+servicios los leen, cada uno con su consumer group, y se pueden releer). Kafka se sumó sin tocar el flujo de RabbitMQ.
+
+### Microservicios
+
+| Servicio | Puerto | Responsabilidad | Exposición |
+|---|---|---|---|
+| ms-bff | 8088 (8080 en EC2-1) | Puerta de entrada, JWT, rol por ruta, CORS | API Gateway |
+| ms-pedidos (`pedidos360-backend`) | 8080 | Pedidos, ciclo de vida (enum), productor RabbitMQ + Kafka | interno |
+| ms-catalog | 8087 | Productos, precios, stock (descuento todo-o-nada e idempotente) | interno |
+| ms-report | 8084 | KPIs: ventas por hora, lead time, estados activos, top productos | interno |
+| ms-audit | 8085 | Timeline de auditoría (solo lectura) | interno |
+| ms-kafka-admin | 8086 | Tópicos, configuraciones, consumer groups, offsets y lag | interno |
+| ms-documentos / ms-notificaciones / ms-rabbit-admin | 8081-8083 | EP3/EP4 | interno |
+
+### Kafka (`deploy/servidor-streaming`)
+
+- 3 Zookeeper (quórum 2) + 3 brokers (Confluent 7.9 = Kafka 3.9) + Kafka-UI, `min.insync.replicas=2`,
+  sin auto-creación de tópicos.
+- Tópicos (`crear-topicos.sh`, idempotente):
+
+| Tópico | Part. | RF | cleanup.policy | Retención | Key |
+|---|---|---|---|---|---|
+| orders.events | 3 | 3 | delete | 7 días | id del pedido (orden por pedido) |
+| audit.timeline | 3 | 3 | compact,delete | 30 días | id del evento |
+| orders.events.report.DLT, orders.events.audit.DLT, audit.timeline.audit.DLT | 3 | 3 | delete | 14 días | original |
+
+- Productor: `acks=all`, idempotencia, lz4, JSON con fechas ISO, envío después del commit de la BD.
+- Consumidores: `ErrorHandlingDeserializer`, validación de payload, reintentos con backoff exponencial y DLT con
+  headers de diagnóstico, idempotencia por `eventoId`, rebalanceo cooperativo, 3 hilos por grupo.
+
+Levantar en local (Kafka-UI en http://localhost:8090):
+
+```bash
+cd deploy/servidor-streaming && docker compose --profile init --profile app up -d --build
+```
+
+### Roles (App Roles de Entra ID)
+
+| Rol | Puede |
+|---|---|
+| Cliente (o sin rol) | Crear pedidos con productos del catálogo, ver y cancelar los suyos |
+| Operador | Ver todos los pedidos y moverlos de estado (aceptar descuenta stock), ver el catálogo |
+| Admin | Catálogo (crear/editar), reportes, auditoría, administración de Kafka y RabbitMQ |
+| Auditor | Auditoría (solo lectura) |
+
+### Despliegue
+
+Push a `BlackDev` → CI (compila y prueba los 9 microservicios y el frontend). El deploy es manual
+(Actions → Run workflow). Pasos de AWS y Azure: [docs/guia-aws-ep5.md](docs/guia-aws-ep5.md).
