@@ -13,11 +13,27 @@ set -e
 RED=pedidos360-net
 JAVA_OPTS="-Djava.net.preferIPv4Stack=true -Xms64m -Xmx192m -XX:MaxMetaspaceSize=128m -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Xss512k"
 
-# Swap de 2 GB: 3 JVM + PostgreSQL + Nginx en una instancia chica
-if [ ! -f /swapfile ]; then
-  sudo dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
-  sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
-  echo '/swapfile swap swap defaults 0 0' | sudo tee -a /etc/fstab >/dev/null
+# ---------------------------------------------------------------- Espacio en disco
+# Los despliegues de la EP1-EP4 compilaban Maven DENTRO de esta EC2 (imágenes y caché de build pesadas) y
+# clonaban el repo en ~/app. Ya no se usan: ahora llegan los .jar probados en CI. Se limpian antes de construir.
+docker image prune -af >/dev/null 2>&1 || true
+docker builder prune -af >/dev/null 2>&1 || true
+rm -rf /home/ec2-user/app
+echo "Disco libre tras limpieza: $(df -h / | awk 'NR==2 {print $4}')"
+
+# Swap de 1 GB (colchón para 3 JVM + PostgreSQL + Nginx). Si quedó un /swapfile a medias de un intento
+# anterior se borra. Solo se crea si sobran al menos 3 GB, para no llenar el disco.
+if ! swapon --show 2>/dev/null | grep -q /swapfile; then
+  sudo swapoff /swapfile 2>/dev/null || true
+  sudo rm -f /swapfile
+  sudo sed -i '\|^/swapfile|d' /etc/fstab
+  if [ "$(df -m / | awk 'NR==2 {print $4}')" -gt 3000 ]; then
+    sudo dd if=/dev/zero of=/swapfile bs=1M count=1024 status=none
+    sudo chmod 600 /swapfile && sudo mkswap /swapfile >/dev/null && sudo swapon /swapfile
+    echo '/swapfile swap swap defaults 0 0' | sudo tee -a /etc/fstab >/dev/null
+  else
+    echo "AVISO: poco espacio en disco, se continúa sin swap"
+  fi
 fi
 
 docker network create $RED 2>/dev/null || true
