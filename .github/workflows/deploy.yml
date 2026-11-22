@@ -191,7 +191,9 @@ jobs:
 
             # EP3 tenía un solo nodo ("pedidos360-rabbitmq"): se retira para liberar los puertos del clúster
             sudo docker rm -f pedidos360-rabbitmq 2>/dev/null || true
-            sudo docker compose up -d --remove-orphans --force-recreate
+            # Sin --force-recreate: compose recrea solo los microservicios cuya imagen cambió. Los nodos RabbitMQ
+            # siguen corriendo entre despliegues (reiniciar ambos a la vez obliga a rearmar el quórum del clúster)
+            sudo docker compose up -d --remove-orphans
             sudo docker image prune -f
             sudo docker compose ps
 

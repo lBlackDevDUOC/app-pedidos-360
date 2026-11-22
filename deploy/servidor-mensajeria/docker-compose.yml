@@ -20,6 +20,7 @@ x-rabbit: &rabbit
     interval: 15s
     timeout: 10s
     retries: 12
+    start_period: 60s   # tiempo para que los 2 nodos se encuentren y formen quórum
 
 x-java: &java
   restart: unless-stopped
@@ -61,9 +62,12 @@ services:
     volumes:
       - ./rabbitmq.conf:/etc/rabbitmq/conf.d/90-pedidos360.conf:ro
       - rabbitmq2_data:/var/lib/rabbitmq
+    # Ambos nodos arrancan juntos. RabbitMQ 4 guarda los metadatos con Khepri (Raft): en un clúster de 2 nodos el
+    # quórum son los 2, así que al reiniciar el nodo 1 no queda "sano" hasta que vuelve el nodo 2. Si el nodo 2
+    # esperara al nodo 1 sano (service_healthy) ninguno arrancaría: bloqueo circular.
     depends_on:
       rabbitmq-1:
-        condition: service_healthy  # el nodo 2 se une al clúster que forma el nodo 1
+        condition: service_started
 
   rabbitmq-policies:
     image: curlimages/curl:8.11.1
