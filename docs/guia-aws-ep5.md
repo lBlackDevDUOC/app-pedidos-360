@@ -79,7 +79,7 @@ Repositorio → Settings → Secrets and variables → Actions:
 | `KAFKA_EC2_HOST` | IP elástica de la EC2-3 |
 | `KAFKA_PRIVATE_IP` | IP privada de la EC2-3 |
 | `KAFKA_UI_USER` / `KAFKA_UI_PASSWORD` | credenciales para Kafka-UI |
-| `FRONTEND_ORIGIN` | URL del frontend, ej. `http://52.86.170.189` (para CORS del BFF; opcional si es esa) |
+| `FRONTEND_ORIGIN` | `http://localhost:4200,http://52.86.170.189` (orígenes permitidos por el BFF; ver "Acceso al frontend" abajo) |
 
 Se reutilizan: `EC2_HOST`, `MQ_EC2_HOST`, `MQ_PRIVATE_IP`, `EC2_USERNAME`, `EC2_SSH_KEY`, `DB_USERNAME`, `DB_PASSWORD`,
 `RABBITMQ_USER`, `RABBITMQ_PASSWORD`, `RABBITMQ_ERLANG_COOKIE`.
@@ -94,6 +94,18 @@ API Gateway → tu HTTP API → **Routes**:
 ### B6. Desplegar
 Push a `BlackDev` = solo compila y prueba. Para desplegar: **Actions → Deploy Pedidos360 → Run workflow** con las 3
 EC2 encendidas. Orden automático: EC2-3 (Kafka) → EC2-2 (RabbitMQ) → EC2-1 (apps).
+
+### Acceso al frontend (túnel SSH)
+Entra ID solo acepta redirect URIs **HTTPS**, salvo `http://localhost`. El frontend de la EC2-1 es HTTP, así que se abre
+con un túnel SSH (reenvío de puerto) y el navegador lo ve como `localhost`:
+
+```bash
+ssh -i Pedidos360.pem -L 4200:localhost:80 ec2-user@52.86.170.189
+```
+
+Luego abrir `http://localhost:4200`. El login usa el redirect URI `http://localhost:4200` registrado en la app de Entra ID
+y las llamadas a la API van al API Gateway por HTTPS. (La alternativa "de producción" sería un dominio con certificado,
+por ejemplo CloudFront delante de la EC2-1.)
 
 ### B7. Verificar
 ```bash
