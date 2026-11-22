@@ -199,6 +199,21 @@ jobs:
 
       # ------------------------------------------------------------------ EC2-1: aplicaciones
       # La EC2-1 ya no compila nada: recibe los .jar y el build de Angular probados en el job ci.
+      # Antes de copiar se libera disco: un /swapfile a medias o restos de builds viejos pueden dejarlo lleno
+      # y entonces ni siquiera se puede subir el paquete.
+      - name: Liberar espacio en la EC2-1
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            if ! swapon --show 2>/dev/null | grep -q /swapfile; then sudo rm -f /swapfile; fi
+            rm -rf /home/ec2-user/app /home/ec2-user/apps
+            docker image prune -af >/dev/null 2>&1 || true
+            docker builder prune -af >/dev/null 2>&1 || true
+            df -h /
+
       - name: Copiar servidor de aplicaciones a la EC2-1
         uses: appleboy/scp-action@v0.1.7
         with:
