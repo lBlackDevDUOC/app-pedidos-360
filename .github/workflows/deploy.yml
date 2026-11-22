@@ -146,7 +146,13 @@ jobs:
             sudo docker build -q -f Dockerfile.jar --build-arg JAR=kafka-admin/app.jar -t pedidos360-ms-kafka-admin .
 
             # 1) Clúster Kafka + Kafka-UI, 2) tópicos (crea los nuevos y reaplica la config), 3) microservicios
-            sudo docker compose up -d --remove-orphans
+            # Si un broker se recrea, Zookeeper conserva unos segundos su sesión anterior: el broker se reinicia una
+            # vez antes de quedar sano. Se reintenta en vez de abortar el despliegue por ese arranque transitorio.
+            for intento in 1 2 3 4; do
+              sudo docker compose up -d --remove-orphans && break
+              echo "Clúster Kafka todavía arrancando (intento $intento), se reintenta en 20 s"
+              sleep 20
+            done
             sudo docker compose run --rm kafka-init
             sudo docker compose --profile app up -d --no-build --remove-orphans --force-recreate ms-report ms-audit ms-kafka-admin
             sudo docker image prune -f
