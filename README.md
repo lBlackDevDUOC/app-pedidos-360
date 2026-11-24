@@ -15,6 +15,7 @@ de forma asíncrona con **RabbitMQ** → ver [Evaluación Parcial N°3](#evaluac
 - [Evidencia de cumplimiento — Evaluación Parcial N°1](#evidencia-de-cumplimiento--evaluación-parcial-n1)
 - [Evaluación Parcial N°3 — Mensajería asíncrona con RabbitMQ](#evaluación-parcial-n3--mensajería-asíncrona-con-rabbitmq)
 - [EP5 / EFT — Streaming con Kafka, roles, catálogo y BFF](#ep5--eft--streaming-con-kafka-roles-catálogo-y-bff)
+- [Evidencia de cumplimiento — EP5 / EP6 / EFT](#evidencia-de-cumplimiento--ep5--ep6--eft)
 
 ## Arquitectura
 
@@ -541,5 +542,99 @@ cd deploy/servidor-streaming && docker compose --profile init --profile app up -
 
 ### Despliegue
 
-Push a `BlackDev` → CI (compila y prueba los 9 microservicios y el frontend). El deploy es manual
-(Actions → Run workflow). Pasos de AWS y Azure: [docs/guia-aws-ep5.md](docs/guia-aws-ep5.md).
+Push a `BlackDev` → job `ci` (compila y prueba los 9 microservicios y el frontend). El job `deploy` no corre solo:
+se ejecuta cuando el mensaje del commit lleva `[deploy]` o al lanzar el workflow a mano (Actions → Run workflow).
+Pasos de AWS y Azure: [docs/guia-aws-ep5.md](docs/guia-aws-ep5.md).
+
+## Evidencia de cumplimiento — EP5 / EP6 / EFT
+
+Capturas tomadas sobre el sistema desplegado en AWS (3 EC2 en la misma VPC, un grupo de seguridad por máquina).
+Se guardan en [`docs/evidencias-ep5/`](docs/evidencias-ep5).
+
+### API Manager y validación del JWT
+
+Una ruta protegida `/api/{proxy+}` hacia el BFF y una pública `/api/health`; el autorizador JWT valida emisor y
+audiencia de Entra ID. El frontend llama solo a `execute-api`.
+
+![Rutas del API Gateway](docs/evidencias-ep5/gw-1-rutas.png)
+![Autorizador JWT](docs/evidencias-ep5/gw-2-autorizador-jwt.png)
+![Llamadas del frontend al gateway](docs/evidencias-ep5/gw-3-network-execute-api.png)
+
+Sin token → 401, token inválido → 401, token real → 200:
+
+![Sin token](docs/evidencias-ep5/seg-1-sin-token-401.png)
+![Token inválido](docs/evidencias-ep5/seg-2-token-invalido-401.png)
+![Token válido](docs/evidencias-ep5/seg-3-token-valido-200.png)
+
+### Identidad y roles
+
+Cuatro App Roles en Entra ID; quien no tiene rol se trata como Cliente. El rol viaja en el claim `roles` del JWT y
+define el menú de la aplicación y lo que aceptan el BFF y los microservicios.
+
+![App roles](docs/evidencias-ep5/roles-1-app-roles.png)
+![Usuarios y roles asignados](docs/evidencias-ep5/roles-2-usuarios-asignados.png)
+![Claims del JWT](docs/evidencias-ep5/roles-3-jwt-claims.png)
+![Menú Admin](docs/evidencias-ep5/menu-admin.png)
+![Menú Operador](docs/evidencias-ep5/menu-operador.png)
+
+### Kafka: arquitectura y tolerancia a fallos
+
+3 ZooKeeper + 3 brokers, factor de replicación 3 y `min.insync.replicas=2`: 3 brokers en línea, 195 réplicas en
+sincronía y 0 particiones sub-replicadas.
+
+![Brokers en Kafka UI](docs/evidencias-ep5/kafka-1-brokers.png)
+![Tópicos con 3 particiones y RF 3](docs/evidencias-ep5/kafka-2-topicos.png)
+![describe de orders.events](docs/evidencias-ep5/kafka-3-describe-orders-events.png)
+![describe de audit.timeline (compact,delete)](docs/evidencias-ep5/kafka-4-describe-audit-timeline.png)
+
+Al detener el broker 2 el ISR baja de 3 a 2 y se elige otro líder; al volver, el ISR regresa a 3:
+
+![Broker 2 detenido](docs/evidencias-ep5/kafka-6-broker-detenido.png)
+![Broker 2 recuperado](docs/evidencias-ep5/kafka-7-broker-recuperado.png)
+
+### Kafka: flujo de eventos, consumer groups y lag
+
+Mensaje real de `orders.events` (key = id del pedido, JSON con `eventoId`, tipo y versión):
+
+![Mensaje con key y JSON](docs/evidencias-ep5/kafka-5-mensaje-key-json.png)
+
+Dos consumer groups independientes (`report-service`, `audit-service`), una partición por consumidor y lag 0. Con
+`ms-report` detenido el grupo queda sin miembros activos y el lag sube; al reiniciarlo vuelve a 0 sin perder mensajes:
+
+![Consumer groups](docs/evidencias-ep5/kafka-8-consumer-groups.png)
+![Tres particiones, lag 0](docs/evidencias-ep5/kafka-9-lag-0.png)
+![Lag mayor que 0 y recuperación](docs/evidencias-ep5/kafka-10-lag-y-recuperacion.png)
+
+### Kafka: administración por API (`ms-kafka-admin`)
+
+![Offsets y lag por partición](docs/evidencias-ep5/kafka-11-api-offsets-lag.png)
+![Configuración inválida rechazada con 400](docs/evidencias-ep5/kafka-12-config-invalida-400.png)
+
+### Aplicación: reaccionando a los eventos
+
+![Reportería en tiempo real](docs/evidencias-ep5/app-1-reportes.png)
+![Trazabilidad de un pedido (ms-audit)](docs/evidencias-ep5/app-2-trazabilidad.png)
+![Estados y stock tras aceptar](docs/evidencias-ep5/app-3-estados-y-stock.png)
+
+### RabbitMQ: clúster, colas y DLQ
+
+![Clúster de 2 nodos](docs/evidencias-ep5/rabbit-1-nodos.png)
+![12 colas (trabajo, .retry y .dlq)](docs/evidencias-ep5/rabbit-2-colas.png)
+![Exchanges](docs/evidencias-ep5/rabbit-3-exchanges.png)
+
+Un pedido de monto libre de 666 simula datos inválidos: ms-documentos lo rechaza (NACK) y queda en la DLQ; el panel
+de administración muestra la alerta.
+
+![DLQ con 1 mensaje](docs/evidencias-ep5/rabbit-4-dlq-ready-1.png)
+![Log del NACK](docs/evidencias-ep5/rabbit-5-log-nack-dlq.png)
+![Alerta en el panel](docs/evidencias-ep5/rabbit-6-panel-alerta-dlq.png)
+
+### Despliegue
+
+Tres EC2 en ejecución, Docker Compose con 11 contenedores sanos en la máquina de streaming y GitHub Actions
+(`ci` + `deploy`). La EC2-1 llega a Kafka (puerto 9092) y la EC2-2 no: cada máquina tiene su rol.
+
+![Instancias EC2](docs/evidencias-ep5/deploy-1-ec2.png)
+![docker compose ps](docs/evidencias-ep5/deploy-2-compose-ps.png)
+![Circuito cerrado EC2-1 / EC2-2](docs/evidencias-ep5/deploy-3-circuito-cerrado.png)
+![Pipeline de GitHub Actions](docs/evidencias-ep5/deploy-4-github-actions.png)
