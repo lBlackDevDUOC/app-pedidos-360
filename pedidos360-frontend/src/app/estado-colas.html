@@ -1,0 +1,58 @@
+<h2>Estado de RabbitMQ</h2>
+<p style="color: #555; font-size: 14px;">
+  Se actualiza cada 5 s
+  @if (ultimaActualizacion()) {
+    · última: {{ ultimaActualizacion()!.toLocaleTimeString() }}
+  }
+  <button type="button" (click)="actualizar()" style="margin-left: 8px; padding: 4px 10px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;">
+    Actualizar
+  </button>
+</p>
+
+@for (a of alertas(); track a.cola) {
+  <p style="background: #fde7e9; color: #a4262c; padding: 8px; border-radius: 4px;">
+    ⚠ <strong>{{ a.cola }}</strong> tiene {{ a.mensajes }} mensaje(s) en cuarentena (DLQ)
+  </p>
+}
+
+@if (error()) {
+  <p style="color: #d9381e;">{{ error() }}</p>
+}
+
+<table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 14px;">
+  <thead>
+    <tr style="background-color: #f0f0f0;">
+      <th style="padding: 6px;">Cola</th>
+      <th style="padding: 6px;" title="Esperando a un consumidor">Listos</th>
+      <th style="padding: 6px;" title="Entregados y sin ACK todavía">Sin confirmar</th>
+      <th style="padding: 6px;">Consumidores</th>
+      <th style="padding: 6px;"></th>
+    </tr>
+  </thead>
+  <tbody>
+    @for (c of colas(); track c.nombre) {
+      <tr [style.background-color]="c.esDlq && c.mensajes > 0 ? '#fde7e9' : ''" style="border-bottom: 1px solid #ddd;">
+        <td style="padding: 6px;">
+          {{ c.nombre }}
+          @if (c.esDlq) {
+            <span style="font-size: 11px; background: #a4262c; color: white; padding: 1px 6px; border-radius: 8px;">DLQ</span>
+          }
+        </td>
+        <td style="padding: 6px;">{{ c.mensajesListos }}</td>
+        <td style="padding: 6px;">{{ c.mensajesSinConfirmar }}</td>
+        <td style="padding: 6px;" [style.color]="!c.esDlq && c.consumidores === 0 ? '#d9381e' : ''">
+          {{ c.consumidores }}
+        </td>
+        <td style="padding: 6px;">
+          @if (c.mensajes > 0) {
+            <button type="button" (click)="purgar(c)" style="padding: 2px 8px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;">
+              Purgar
+            </button>
+          }
+        </td>
+      </tr>
+    } @empty {
+      <tr><td colspan="5" style="padding: 6px;">Sin datos de colas.</td></tr>
+    }
+  </tbody>
+</table>

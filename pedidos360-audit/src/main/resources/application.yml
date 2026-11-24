@@ -1,0 +1,78 @@
+server:
+  port: 8085
+
+spring:
+  application:
+    name: ms-audit
+
+  # ---------------------------------------------------------------- Seguridad (Microsoft Entra ID, misma app que ms-pedidos)
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://login.microsoftonline.com/bb5324af-c266-41ed-b36c-a971641c7af2/v2.0
+          audiences: d4b53b0b-a9b3-42b4-b63d-71d24f58813b
+
+  # ---------------------------------------------------------------- Base de datos propia (registros de auditoría)
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5433/audit_db}
+    username: ${DB_USERNAME:pedidos360}
+    password: ${DB_PASSWORD:pedidos360}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+
+  # ---------------------------------------------------------------- Cliente Kafka
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092,localhost:9093,localhost:9094}
+    client-id: ms-audit
+    consumer:
+      # Grupo distinto de report-service: ambos leen TODOS los mensajes de orders.events (pub/sub). Dentro de
+      # este grupo, los hilos se reparten las particiones (balanceo de carga).
+      group-id: audit-service
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      max-poll-records: 50
+      properties:
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
+        # El tipo destino lo fija cada @KafkaListener (audit.timeline y orders.events traen DTO distintos)
+        spring.json.use.type.headers: false
+        spring.json.trusted.packages: cl.duoc.pedidos360.audit.messaging.event
+        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+        session.timeout.ms: 15000
+        heartbeat.interval.ms: 5000
+    listener:
+      concurrency: 3
+      ack-mode: record
+    producer:
+      acks: all
+      properties:
+        enable.idempotence: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+# ---------------------------------------------------------------- Tópicos y manejo de errores (centralizado)
+app:
+  kafka:
+    topicos:
+      auditoria: audit.timeline
+      pedidos: orders.events
+      # DLT de este consumidor = <tópico de origen> + sufijo (audit.timeline.audit.DLT, orders.events.audit.DLT)
+      sufijo-dlt: .audit.DLT
+    reintentos:
+      maximo: 3
+      espera-inicial-ms: 1000
+      multiplicador: 2.0
+  cors:
+    allowed-origins: http://localhost:4200,http://52.86.170.189

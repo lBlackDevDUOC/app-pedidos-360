@@ -1,0 +1,64 @@
+server:
+  port: 8086
+
+spring:
+  application:
+    name: ms-kafka-admin
+
+  # ---------------------------------------------------------------- Seguridad (Microsoft Entra ID, misma app que ms-pedidos)
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://login.microsoftonline.com/bb5324af-c266-41ed-b36c-a971641c7af2/v2.0
+          audiences: d4b53b0b-a9b3-42b4-b63d-71d24f58813b
+
+  # ---------------------------------------------------------------- Conexión al clúster (AdminClient)
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092,localhost:9093,localhost:9094}
+    client-id: ms-kafka-admin
+    admin:
+      properties:
+        request.timeout.ms: 10000
+        default.api.timeout.ms: 15000
+
+  jackson:
+    mapper:
+      accept-case-insensitive-enums: true   # "earliest" y "EARLIEST" son válidos al resetear offsets
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+app:
+  kafka-admin:
+    # Tiempo máximo de espera de cada operación contra el clúster
+    timeout-ms: 15000
+    # Tópicos del sistema Pedidos360: se pueden consultar y ajustar su configuración, pero no eliminar
+    topicos-protegidos:
+      - orders.events
+      - audit.timeline
+    # Además se protegen los DLT (sufijo) y los internos de Kafka (prefijo "__", ej. __consumer_offsets)
+    sufijos-protegidos:
+      - .DLT
+    # Únicas configuraciones de tópico que se pueden modificar desde la API (lista blanca)
+    configs-editables:
+      - retention.ms
+      - retention.bytes
+      - cleanup.policy
+      - min.insync.replicas
+      - segment.ms
+      - max.message.bytes
+      - compression.type
+      - delete.retention.ms
+      - min.compaction.lag.ms
+    # Límites para crear tópicos
+    max-particiones: 50
+  cors:
+    allowed-origins: http://localhost:4200,http://52.86.170.189

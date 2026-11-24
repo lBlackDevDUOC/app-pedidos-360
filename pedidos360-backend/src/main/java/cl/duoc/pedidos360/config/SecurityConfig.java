@@ -54,8 +54,9 @@ public class SecurityConfig {
                         // Cualquier otra ruta también se protege por defecto
                         .anyRequest().authenticated()
                 )
-                // Valida el JWT (firma, issuer, expiración, audience) según application.properties
-                .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()));
+                // Valida el JWT (firma, issuer, expiración, audience) según application.yml y
+                // traduce scopes y App Roles de Entra ID a permisos (ver RolesJwtConverter)
+                .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.jwtAuthenticationConverter(new RolesJwtConverter())));
 
         return http.build();
     }

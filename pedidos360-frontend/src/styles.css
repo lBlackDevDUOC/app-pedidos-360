@@ -1,1 +1,101 @@
-/* You can add global styles to this file, and also import other style files */
+/* Estilos globales de Pedidos360 (una sola hoja para no duplicar estilos por componente). */
+:root {
+  --fondo: #f6f4f1;
+  --tarjeta: #ffffff;
+  --texto: #2b2623;
+  --suave: #6e6560;
+  --borde: #e2ddd7;
+  --marca: #8a4b20;
+  --marca-claro: #f3e6dc;
+  --ok: #1d7a46;
+  --error: #b3261e;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--texto);
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--fondo); }
+a { color: var(--marca); }
+h2 { margin-top: 0; }
+
+.cabecera {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 12px 20px; background: var(--marca); color: #fff;
+}
+.cabecera h1 { margin: 0; font-size: 1.3rem; }
+.usuario { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.usuario .btn { background: transparent; color: #fff; border-color: rgba(255, 255, 255, .6); }
+
+.contenedor { display: flex; min-height: calc(100vh - 56px); }
+.menu { width: 190px; padding: 16px 0; background: var(--tarjeta); border-right: 1px solid var(--borde); }
+.menu a { display: block; padding: 10px 20px; text-decoration: none; color: var(--texto); }
+.menu a.activo { background: var(--marca-claro); color: var(--marca); font-weight: 600; }
+.contenido { flex: 1; padding: 20px; min-width: 0; }
+
+@media (max-width: 720px) {
+  .contenedor { flex-direction: column; }
+  .menu { width: 100%; display: flex; overflow-x: auto; padding: 0; border-right: 0; border-bottom: 1px solid var(--borde); }
+  .menu a { white-space: nowrap; }
+  .contenido { padding: 16px; }
+}
+
+.btn {
+  padding: 7px 14px; border: 1px solid var(--borde); border-radius: 6px; background: var(--tarjeta);
+  color: var(--texto); cursor: pointer; font: inherit;
+}
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.primario { background: var(--marca); border-color: var(--marca); color: #fff; }
+.btn.peligro { border-color: var(--error); color: var(--error); }
+
+.panel { background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 8px; padding: 16px; margin: 16px 0; }
+.nota { color: var(--suave); font-size: .9rem; }
+.error { color: var(--error); background: #fdecea; padding: 8px 12px; border-radius: 6px; }
+.ok { color: var(--ok); background: #e7f4ec; padding: 8px 12px; border-radius: 6px; }
+.alerta { background: #fff4d6; padding: 8px 12px; border-radius: 6px; }
+
+.tabla { width: 100%; border-collapse: collapse; font-size: .92rem; background: var(--tarjeta); }
+.tabla th, .tabla td { padding: 8px; border-bottom: 1px solid var(--borde); text-align: left; vertical-align: top; }
+.tabla th { background: #faf8f6; }
+.panel { overflow-x: auto; }
+
+.filtros, .acciones, .paginacion { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin: 12px 0; }
+.filtros label, .formulario label { display: flex; flex-direction: column; gap: 4px; font-size: .85rem; color: var(--suave); }
+input, select { padding: 6px 8px; border: 1px solid var(--borde); border-radius: 6px; font: inherit; }
+.formulario { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.formulario .check { flex-direction: row; align-items: center; }
+
+.tarjetas { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin: 12px 0; }
+.tarjeta { background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 8px; padding: 14px; }
+.tarjeta span { display: block; color: var(--suave); font-size: .85rem; }
+.tarjeta strong { font-size: 1.4rem; }
+
+.productos { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
+.producto { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--borde); border-radius: 6px; }
+.producto input { width: 70px; }
+
+.grilla { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.producto-card { background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 8px; padding: 12px; }
+.producto-card h4 { margin: 4px 0; }
+.producto-card.inactivo { opacity: .55; }
+.bajo { color: var(--error); font-weight: 600; }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: .78rem; font-weight: 600; background: #eee; }
+.estado-creado { background: #e8eefc; color: #2f4fa8; }
+.estado-aceptado { background: #e7f4ec; color: #1d7a46; }
+.estado-en_preparacion { background: #fff4d6; color: #8a6100; }
+.estado-despachado { background: #f3e6dc; color: #8a4b20; }
+.estado-entregado { background: #dff3e4; color: #14532d; }
+.estado-cancelado { background: #fdecea; color: #b3261e; }
+
+.barras { display: flex; align-items: flex-end; gap: 3px; height: 180px; padding-top: 8px; overflow-x: auto; }
+.barra { flex: 1 0 14px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; }
+.barra .relleno { width: 100%; background: var(--marca); border-radius: 3px 3px 0 0; min-height: 1px; }
+.barra small { font-size: .65rem; color: var(--suave); }
+.dos-columnas { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+
+.timeline { list-style: none; padding: 0; }
+.timeline li { padding: 8px 0 8px 14px; border-left: 3px solid var(--marca-claro); margin-left: 6px; }
+.timeline time { color: var(--suave); margin-right: 8px; font-size: .85rem; }
+.timeline small { display: block; color: var(--suave); }
+
+.login { max-width: 420px; margin: 60px auto; text-align: center; background: var(--tarjeta); padding: 32px; border-radius: 10px; border: 1px solid var(--borde); }

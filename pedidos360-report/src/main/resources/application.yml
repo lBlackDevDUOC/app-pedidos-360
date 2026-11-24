@@ -1,0 +1,86 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: ms-report
+
+  # ---------------------------------------------------------------- Seguridad (Microsoft Entra ID, misma app que ms-pedidos)
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://login.microsoftonline.com/bb5324af-c266-41ed-b36c-a971641c7af2/v2.0
+          audiences: d4b53b0b-a9b3-42b4-b63d-71d24f58813b
+
+  # ---------------------------------------------------------------- Base de datos propia (proyecciones de KPIs)
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5433/report_db}
+    username: ${DB_USERNAME:pedidos360}
+    password: ${DB_PASSWORD:pedidos360}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+
+  # ---------------------------------------------------------------- Cliente Kafka
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092,localhost:9093,localhost:9094}
+    client-id: ms-report
+    consumer:
+      # Consumer group: las 3 instancias del listener (concurrency 3) se reparten las 3 particiones de
+      # orders.events. Otro grupo (audit-service) lee el MISMO tópico de forma independiente.
+      group-id: report-service
+      # Grupo nuevo (o offset vencido por retención): parte desde el mensaje más antiguo disponible
+      auto-offset-reset: earliest
+      # El offset lo confirma Spring después de procesar cada registro (ack-mode record), no un timer
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # ErrorHandlingDeserializer: si un mensaje no es JSON válido no revienta el consumidor en bucle;
+      # la excepción se entrega al error handler, que lo manda directo al DLT.
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      max-poll-records: 50
+      properties:
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
+        spring.json.value.default.type: cl.duoc.pedidos360.report.messaging.event.EventoPedido
+        spring.json.use.type.headers: false
+        spring.json.trusted.packages: cl.duoc.pedidos360.report.messaging.event
+        # Rebalanceo cooperativo: al entrar/salir un consumidor solo se mueven las particiones necesarias,
+        # el resto sigue consumiendo (sin "stop the world")
+        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+        session.timeout.ms: 15000
+        heartbeat.interval.ms: 5000
+        max.poll.interval.ms: 300000
+    listener:
+      # 3 hilos = 1 consumidor por partición (orders.events tiene 3)
+      concurrency: 3
+      ack-mode: record
+    # Productor: solo para publicar en el Dead Letter Topic los eventos que fallaron
+    producer:
+      acks: all
+      properties:
+        enable.idempotence: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+# ---------------------------------------------------------------- Tópicos y manejo de errores (centralizado)
+app:
+  kafka:
+    topicos:
+      pedidos: orders.events
+      # Dead Letter Topic propio de este consumidor (lo crea crear-topicos.sh)
+      dlt: orders.events.report.DLT
+    reintentos:
+      maximo: 3              # reintentos antes de enviar al DLT
+      espera-inicial-ms: 1000
+      multiplicador: 2.0     # 1 s, 2 s, 4 s (backoff exponencial)
+  cors:
+    allowed-origins: http://localhost:4200,http://52.86.170.189

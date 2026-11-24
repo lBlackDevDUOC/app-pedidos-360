@@ -1,0 +1,62 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: ms-documentos
+
+  # ---------------------------------------------------------------- Conexión a RabbitMQ
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:localhost}
+    port: 5672
+    username: ${SPRING_RABBITMQ_USERNAME:pedidos360}
+    password: ${SPRING_RABBITMQ_PASSWORD:pedidos360}
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
+    listener:
+      simple:
+        acknowledge-mode: manual     # ACK explícito con basicAck / basicNack
+        prefetch: 5                  # máx. mensajes sin confirmar por consumidor
+        concurrency: 1
+        max-concurrency: 3
+        default-requeue-rejected: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+# ---------------------------------------------------------------- Topología de mensajería (centralizada)
+app:
+  rabbitmq:
+    exchanges:
+      eventos: pedidos360.events
+      reintentos: pedidos360.retry
+      dead-letter: pedidos360.dlx
+    routing-keys:
+      pedido-creado: pedido.creado             # consume
+      documento-generado: documento.generado   # publica
+    colas:
+      pedido-creado:
+        nombre: documentos.pedido-creado.q
+        reintento: documentos.pedido-creado.retry
+        dlq: documentos.pedido-creado.dlq
+    reintentos:
+      maximo: 3
+      espera-ms: 5000
+    retencion:
+      ttl-cola-ms: 600000
+      max-mensajes-cola: 1000
+      ttl-dlq-ms: 86400000
+      max-mensajes-dlq: 5000
+
+  # ---------------------------------------------------------------- Simulación de fallos (solo demo)
+  # Permite mostrar en vivo los tres caminos del consumidor creando pedidos con estos totales.
+  simulacion:
+    habilitada: true
+    total-falla-una-vez: 7       # error temporal: falla el 1er intento y se recupera con el reintento
+    total-falla-siempre: 13      # error temporal persistente: agota los reintentos y termina en la DLQ
+    total-datos-invalidos: 666   # error NO recuperable: va directo a la DLQ, sin reintentos

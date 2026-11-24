@@ -1,13 +1,25 @@
 name: Deploy Pedidos360
 
+# Arquitectura:
+#   EC2-1 (EC2_HOST)        → frontend (Nginx) + ms-bff (único puerto de API) + ms-pedidos + ms-catalog + PostgreSQL
+#   EC2-2 (MQ_EC2_HOST)     → clúster RabbitMQ de 2 nodos + ms-documentos + ms-notificaciones + ms-rabbit-admin
+#   EC2-3 (KAFKA_EC2_HOST)  → Kafka (3 Zookeeper + 3 brokers) + Kafka-UI + ms-report + ms-audit + ms-kafka-admin
+#   Todas en la misma VPC: se hablan por IP privada (MQ_PRIVATE_IP, KAFKA_PRIVATE_IP).
+#
+# Dos jobs:
+#   ci     → en cada push a BlackDev: compila el frontend y prueba/empaqueta todos los microservicios.
+#   deploy → solo cuando se pide: "Run workflow" (si el workflow de main lo permite) o un push cuyo mensaje
+#            de commit incluya [deploy]. Las EC2 no siempre están encendidas: un push normal no toca AWS.
+#            Ejemplo: git commit --allow-empty -m "Deploy [deploy]" && git push
+
 on:
   push:
     branches: [ "BlackDev" ]
+  workflow_dispatch:
 
 jobs:
-  deploy:
+  ci:
     runs-on: ubuntu-latest
-
     steps:
       - name: Descargar código
         uses: actions/checkout@v4
@@ -23,88 +35,217 @@ jobs:
           npm ci
           npm run build -- --configuration production
 
-      # 1. Actualizar código del Backend en EC2 primero
-      - name: Sincronizar repositorio en EC2
+      - name: Configurar Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # Pruebas de todos los microservicios: si alguna falla, no se despliega nada
+      - name: Pruebas y empaquetado de microservicios
+        run: |
+          for ms in pedidos360-backend pedidos360-catalog pedidos360-bff \
+                    pedidos360-documentos pedidos360-notificaciones pedidos360-rabbit-admin \
+                    pedidos360-report pedidos360-audit pedidos360-kafka-admin; do
+            echo "::group::$ms"
+            mvn -B -ntp -f $ms/pom.xml verify
+            echo "::endgroup::"
+          done
+
+      - name: Armar paquete del servidor de mensajería
+        run: |
+          mkdir -p mensajeria/documentos mensajeria/notificaciones mensajeria/rabbit-admin
+          cp pedidos360-documentos/target/*-SNAPSHOT.jar      mensajeria/documentos/app.jar
+          cp pedidos360-notificaciones/target/*-SNAPSHOT.jar  mensajeria/notificaciones/app.jar
+          cp pedidos360-rabbit-admin/target/*-SNAPSHOT.jar    mensajeria/rabbit-admin/app.jar
+          cp deploy/servidor-mensajeria/* rabbitmq/aplicar-policies.sh mensajeria/
+          ls -R mensajeria
+
+      - name: Armar paquete del servidor de aplicaciones
+        run: |
+          mkdir -p apps/pedidos apps/catalog apps/bff apps/frontend
+          cp pedidos360-backend/target/*-SNAPSHOT.jar apps/pedidos/app.jar
+          cp pedidos360-catalog/target/*-SNAPSHOT.jar apps/catalog/app.jar
+          cp pedidos360-bff/target/*-SNAPSHOT.jar     apps/bff/app.jar
+          cp -r pedidos360-frontend/dist pedidos360-frontend/Dockerfile pedidos360-frontend/nginx.conf apps/frontend/
+          cp deploy/servidor-apps/* apps/
+          ls -R apps | head -40
+
+      - name: Armar paquete del servidor de streaming
+        run: |
+          mkdir -p streaming/report streaming/audit streaming/kafka-admin
+          cp pedidos360-report/target/*-SNAPSHOT.jar      streaming/report/app.jar
+          cp pedidos360-audit/target/*-SNAPSHOT.jar       streaming/audit/app.jar
+          cp pedidos360-kafka-admin/target/*-SNAPSHOT.jar streaming/kafka-admin/app.jar
+          cp deploy/servidor-streaming/* streaming/
+          ls -R streaming
+
+      # El job de deploy corre en otra máquina: se le pasan los artefactos ya compilados y probados
+      - name: Guardar artefactos
+        if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[deploy]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: paquetes
+          retention-days: 1
+          path: |
+            apps
+            mensajeria
+            streaming
+
+  deploy:
+    needs: ci
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[deploy]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Recuperar artefactos del job ci
+        uses: actions/download-artifact@v4
+        with:
+          name: paquetes
+
+      # ------------------------------------------------------------------ EC2-3: servidor de streaming (Kafka)
+      # Primero de todos: ms-pedidos publica eventos a Kafka apenas arranca.
+      - name: Copiar servidor de streaming a la EC2-3
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.KAFKA_EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "streaming"
+          target: "/home/ec2-user"
+
+      - name: Desplegar clúster Kafka en la EC2-3
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          KAFKA_PRIVATE_IP: ${{ secrets.KAFKA_PRIVATE_IP }}
+          KAFKA_UI_USER: ${{ secrets.KAFKA_UI_USER }}
+          KAFKA_UI_PASSWORD: ${{ secrets.KAFKA_UI_PASSWORD }}
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        with:
+          host: ${{ secrets.KAFKA_EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: KAFKA_PRIVATE_IP,KAFKA_UI_USER,KAFKA_UI_PASSWORD,DB_USERNAME,DB_PASSWORD
+          command_timeout: 25m
+          script: |
+            set -e
+            cd /home/ec2-user/streaming
+            sh preparar-ec2.sh
+
+            # Los brokers se anuncian con la IP privada: los clientes de la EC2-1 llegan por dentro de la VPC
+            printf 'KAFKA_ADVERTISED_HOST=%s\nKAFKA_UI_USER=%s\nKAFKA_UI_PASSWORD=%s\nDB_USERNAME=%s\nDB_PASSWORD=%s\n' \
+              "$KAFKA_PRIVATE_IP" "$KAFKA_UI_USER" "$KAFKA_UI_PASSWORD" "$DB_USERNAME" "$DB_PASSWORD" > .env
+            chmod 600 .env
+
+            sudo docker build -q -f Dockerfile.jar --build-arg JAR=report/app.jar      -t pedidos360-ms-report .
+            sudo docker build -q -f Dockerfile.jar --build-arg JAR=audit/app.jar       -t pedidos360-ms-audit .
+            sudo docker build -q -f Dockerfile.jar --build-arg JAR=kafka-admin/app.jar -t pedidos360-ms-kafka-admin .
+
+            # 1) Clúster Kafka + Kafka-UI, 2) tópicos (crea los nuevos y reaplica la config), 3) microservicios
+            # Si un broker se recrea, Zookeeper conserva unos segundos su sesión anterior: el broker se reinicia una
+            # vez antes de quedar sano. Se reintenta en vez de abortar el despliegue por ese arranque transitorio.
+            for intento in 1 2 3 4; do
+              sudo docker compose up -d --remove-orphans && break
+              echo "Clúster Kafka todavía arrancando (intento $intento), se reintenta en 20 s"
+              sleep 20
+            done
+            sudo docker compose run --rm kafka-init
+            sudo docker compose --profile app up -d --no-build --remove-orphans --force-recreate ms-report ms-audit ms-kafka-admin
+            sudo docker image prune -f
+            sudo docker compose ps
+
+      # ------------------------------------------------------------------ EC2-2: servidor de mensajería
+      # Antes que la EC2-1, para que RabbitMQ esté arriba cuando arranque ms-pedidos.
+      - name: Copiar servidor de mensajería a la EC2-2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.MQ_EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "mensajeria"
+          target: "/home/ec2-user"
+
+      - name: Desplegar clúster RabbitMQ y microservicios en la EC2-2
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          RABBITMQ_USER: ${{ secrets.RABBITMQ_USER }}
+          RABBITMQ_PASSWORD: ${{ secrets.RABBITMQ_PASSWORD }}
+          RABBITMQ_ERLANG_COOKIE: ${{ secrets.RABBITMQ_ERLANG_COOKIE }}
+        with:
+          host: ${{ secrets.MQ_EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: RABBITMQ_USER,RABBITMQ_PASSWORD,RABBITMQ_ERLANG_COOKIE
+          command_timeout: 20m
+          script: |
+            set -e
+            cd /home/ec2-user/mensajeria
+            sh preparar-ec2.sh
+
+            # Credenciales y Erlang cookie del clúster para docker compose (solo legibles por ec2-user)
+            printf 'RABBITMQ_USER=%s\nRABBITMQ_PASSWORD=%s\nRABBITMQ_ERLANG_COOKIE=%s\n' \
+              "$RABBITMQ_USER" "$RABBITMQ_PASSWORD" "$RABBITMQ_ERLANG_COOKIE" > .env
+            chmod 600 .env
+
+            sudo docker build -q -f Dockerfile.jar --build-arg JAR=documentos/app.jar     -t pedidos360-ms-documentos .
+            sudo docker build -q -f Dockerfile.jar --build-arg JAR=notificaciones/app.jar -t pedidos360-ms-notificaciones .
+            sudo docker build -q -f Dockerfile.jar --build-arg JAR=rabbit-admin/app.jar   -t pedidos360-ms-rabbit-admin .
+
+            # EP3 tenía un solo nodo ("pedidos360-rabbitmq"): se retira para liberar los puertos del clúster
+            sudo docker rm -f pedidos360-rabbitmq 2>/dev/null || true
+            # Sin --force-recreate: compose recrea solo los microservicios cuya imagen cambió. Los nodos RabbitMQ
+            # siguen corriendo entre despliegues (reiniciar ambos a la vez obliga a rearmar el quórum del clúster)
+            sudo docker compose up -d --remove-orphans
+            sudo docker image prune -f
+            sudo docker compose ps
+
+      # ------------------------------------------------------------------ EC2-1: aplicaciones
+      # La EC2-1 ya no compila nada: recibe los .jar y el build de Angular probados en el job ci.
+      # Antes de copiar se libera disco: un /swapfile a medias o restos de builds viejos pueden dejarlo lleno
+      # y entonces ni siquiera se puede subir el paquete.
+      - name: Liberar espacio en la EC2-1
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            mkdir -p /home/ec2-user/app
-            if [ -d "/home/ec2-user/app/.git" ]; then
-              cd /home/ec2-user/app
-              git fetch origin BlackDev
-              git reset --hard origin/BlackDev
-            else
-              rm -rf /home/ec2-user/app
-              git clone -b BlackDev https://github.com/${{ github.repository }}.git /home/ec2-user/app
-            fi
+            if ! swapon --show 2>/dev/null | grep -q /swapfile; then sudo rm -f /swapfile; fi
+            rm -rf /home/ec2-user/app /home/ec2-user/apps
+            docker image prune -af >/dev/null 2>&1 || true
+            docker builder prune -af >/dev/null 2>&1 || true
+            df -h /
 
-      # 2. Copiar archivos compilados del Frontend a la EC2
-      - name: Copiar dist del Frontend a la EC2
+      - name: Copiar servidor de aplicaciones a la EC2-1
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          source: "pedidos360-frontend/dist,pedidos360-frontend/Dockerfile,pedidos360-frontend/nginx.conf"
-          target: "/home/ec2-user/app"
+          source: "apps"
+          target: "/home/ec2-user"
 
-      # 3. Desplegar contenedores Docker en EC2
-      - name: Ejecutar despliegue Docker en EC2
+      - name: Desplegar frontend, BFF, ms-pedidos y ms-catalog en la EC2-1
         uses: appleboy/ssh-action@v1.0.3
         env:
           DB_USERNAME: ${{ secrets.DB_USERNAME }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          MQ_PRIVATE_IP: ${{ secrets.MQ_PRIVATE_IP }}
+          KAFKA_PRIVATE_IP: ${{ secrets.KAFKA_PRIVATE_IP }}
+          RABBITMQ_USER: ${{ secrets.RABBITMQ_USER }}
+          RABBITMQ_PASSWORD: ${{ secrets.RABBITMQ_PASSWORD }}
+          FRONTEND_ORIGIN: ${{ secrets.FRONTEND_ORIGIN }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: DB_USERNAME,DB_PASSWORD
+          envs: DB_USERNAME,DB_PASSWORD,MQ_PRIVATE_IP,KAFKA_PRIVATE_IP,RABBITMQ_USER,RABBITMQ_PASSWORD,FRONTEND_ORIGIN
+          command_timeout: 20m
           script: |
-            # Crear red personalizada de Docker si no existe
-            docker network create pedidos360-net || true
-            
-            # Verificar o iniciar PostgreSQL
-            if [ ! "$(docker ps -q -f name=pedidos360-db)" ]; then
-              docker run -d \
-                --name pedidos360-db \
-                --network pedidos360-net \
-                -e POSTGRES_DB=pedidos360_db \
-                -e POSTGRES_USER="$DB_USERNAME" \
-                -e POSTGRES_PASSWORD="$DB_PASSWORD" \
-                -p 5432:5432 \
-                -v postgres-data:/var/lib/postgresql/data \
-                --restart unless-stopped \
-                postgres:16-alpine || true
-            else
-              docker network connect pedidos360-net pedidos360-db || true
-            fi
-            
-            # Reconstruir y desplegar la imagen de Spring Boot
-            cd /home/ec2-user/app/pedidos360-backend
-            docker build -t pedidos360-backend .
-            docker stop pedidos360-backend || true
-            docker rm pedidos360-backend || true
-            docker run -d \
-              --name pedidos360-backend \
-              --network pedidos360-net \
-              -p 8080:8080 \
-              -e SPRING_DATASOURCE_URL=jdbc:postgresql://pedidos360-db:5432/pedidos360_db \
-              -e DB_USERNAME="$DB_USERNAME" \
-              -e DB_PASSWORD="$DB_PASSWORD" \
-              --restart unless-stopped \
-              pedidos360-backend
-
-            # Reconstruir y desplegar Frontend (Angular + Nginx)
-            cd /home/ec2-user/app/pedidos360-frontend
-            docker build -t pedidos360-frontend .
-            docker stop pedidos360-frontend || true
-            docker rm pedidos360-frontend || true
-            docker run -d \
-              --name pedidos360-frontend \
-              --network pedidos360-net \
-              -p 80:80 \
-              --restart unless-stopped \
-              pedidos360-frontend
+            set -e
+            cd /home/ec2-user/apps
+            sh desplegar.sh

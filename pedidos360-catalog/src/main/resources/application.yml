@@ -1,0 +1,40 @@
+server:
+  port: 8087
+
+spring:
+  application:
+    name: ms-catalog
+
+  # ---------------------------------------------------------------- Seguridad (Microsoft Entra ID, misma app que ms-pedidos)
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://login.microsoftonline.com/bb5324af-c266-41ed-b36c-a971641c7af2/v2.0
+          audiences: d4b53b0b-a9b3-42b4-b63d-71d24f58813b
+
+  # ---------------------------------------------------------------- Base de datos propia del catálogo
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/catalog_db}
+    username: ${DB_USERNAME:pedidos360}
+    password: ${DB_PASSWORD:pedidos360}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+app:
+  # Productos de ejemplo (panadería/café) que se cargan solo si el catálogo está vacío
+  datos-iniciales: ${CATALOG_DATOS_INICIALES:true}
+  cors:
+    allowed-origins: http://localhost:4200,http://52.86.170.189

@@ -1,0 +1,131 @@
+### Pruebas manuales de ms-rabbit-admin (IntelliJ HTTP Client: botón ▶ junto a cada petición)
+# 1) Inicia sesión en http://localhost:4200, abre DevTools → Network, copia el header
+#    "Authorization: Bearer ..." de cualquier llamada a localhost:8080 y pega el token abajo.
+@admin = http://localhost:8083/api/admin
+@token = PEGAR_AQUI_EL_ACCESS_TOKEN
+
+### --- Sin token → 401
+GET {{admin}}/queues
+
+### --- Listar colas con métricas → 200
+GET {{admin}}/queues
+Authorization: Bearer {{token}}
+
+### --- Crear exchange → 201
+POST {{admin}}/exchanges
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "nombre": "demo.reportes", "tipo": "TOPIC" }
+
+### --- Crear cola con TTL, largo máximo y DLX → 201 + Location
+POST {{admin}}/queues
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "nombre": "demo.reportes.q",
+  "ttlMs": 60000,
+  "maxMensajes": 100,
+  "deadLetterExchange": "pedidos360.dlx",
+  "deadLetterRoutingKey": "demo.reportes.q"
+}
+
+### --- Crear la misma cola otra vez → 409
+POST {{admin}}/queues
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "nombre": "demo.reportes.q" }
+
+### --- Enlazar cola al exchange → 201
+POST {{admin}}/bindings
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "exchange": "demo.reportes", "cola": "demo.reportes.q", "routingKey": "reporte.*" }
+
+### --- Listar bindings → 200
+GET {{admin}}/bindings
+Authorization: Bearer {{token}}
+
+### ================= Validación (todas → 400 con detalle por campo)
+
+### Nombre vacío
+POST {{admin}}/queues
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "nombre": "" }
+
+### Nombre con espacios
+POST {{admin}}/queues
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "nombre": "mi cola" }
+
+### Prefijo reservado amq.
+POST {{admin}}/queues
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "nombre": "amq.mia" }
+
+### TTL y largo negativos
+POST {{admin}}/queues
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "nombre": "demo.x", "ttlMs": -1, "maxMensajes": 0 }
+
+### Routing key de DLX sin exchange DLX
+POST {{admin}}/queues
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "nombre": "demo.x", "deadLetterRoutingKey": "algo" }
+
+### Tipo de exchange inexistente
+POST {{admin}}/exchanges
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "nombre": "demo.x", "tipo": "BROADCAST" }
+
+### DLX que no existe → 422
+POST {{admin}}/queues
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "nombre": "demo.x", "deadLetterExchange": "no.existe" }
+
+### ================= Eliminación
+
+### Cola del sistema → 409 (protegida)
+DELETE {{admin}}/queues/documentos.pedido-creado.q
+Authorization: Bearer {{token}}
+
+### Purgar una DLQ del sistema → 200 (sí permitido)
+DELETE {{admin}}/queues/documentos.pedido-creado.dlq/messages
+Authorization: Bearer {{token}}
+
+### Eliminar binding → 204
+DELETE {{admin}}/bindings?exchange=demo.reportes&cola=demo.reportes.q&routingKey=reporte.*
+Authorization: Bearer {{token}}
+
+### Eliminar cola → 204
+DELETE {{admin}}/queues/demo.reportes.q
+Authorization: Bearer {{token}}
+
+### Eliminar la misma cola otra vez → 404
+DELETE {{admin}}/queues/demo.reportes.q
+Authorization: Bearer {{token}}
+
+### Eliminar exchange → 204
+DELETE {{admin}}/exchanges/demo.reportes
+Authorization: Bearer {{token}}
+
+### Alertas de DLQ activas
+GET {{admin}}/alerts
+Authorization: Bearer {{token}}

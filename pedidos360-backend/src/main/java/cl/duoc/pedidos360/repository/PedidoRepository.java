@@ -2,13 +2,10 @@ package cl.duoc.pedidos360.repository;
 
 import cl.duoc.pedidos360.model.Pedido;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.stereotype.Repository;
 
-import java.util.List;
-
+/** JpaSpecificationExecutor permite armar el WHERE con filtros opcionales (ver {@link PedidoSpecs}). */
 @Repository
-public interface PedidoRepository extends JpaRepository<Pedido, Long> {
-
-    /** Pedidos de un cliente (por su oid de Entra ID), los más recientes primero. */
-    List<Pedido> findByClienteOidOrderByFechaCreacionDesc(String oid);
+public interface PedidoRepository extends JpaRepository<Pedido, Long>, JpaSpecificationExecutor<Pedido> {
 }
